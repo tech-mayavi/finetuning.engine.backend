@@ -1,4 +1,5 @@
 from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, File, Form, Request
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, Dict, Any, Union
 import asyncio
@@ -19,6 +20,15 @@ app = FastAPI(
     title="Model Finetuning API",
     description="API for finetuning language models with real-time logging",
     version="1.0.0"
+)
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows all origins
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all methods
+    allow_headers=["*"],  # Allows all headers
 )
 
 # Store training jobs status
@@ -275,8 +285,12 @@ async def handle_multipart_request(request: Request, background_tasks: Backgroun
         if not data_file:
             raise HTTPException(status_code=400, detail="data_file is required")
         
+        # Check if data_file is actually an UploadFile object
+        if not hasattr(data_file, 'filename') or not hasattr(data_file, 'file'):
+            raise HTTPException(status_code=400, detail="data_file must be a valid file upload")
+        
         # Extract parameters with defaults
-        model_name = form.get("model_name", "unsloth/llama-3-8b-bnb-4bit")
+        model_name = str(form.get("model_name", "unsloth/llama-3-8b-bnb-4bit"))
         max_seq_length = int(form.get("max_seq_length", 2048))
         num_train_epochs = int(form.get("num_train_epochs", 3))
         per_device_train_batch_size = int(form.get("per_device_train_batch_size", 2))
@@ -286,13 +300,16 @@ async def handle_multipart_request(request: Request, background_tasks: Backgroun
         warmup_steps = int(form.get("warmup_steps", 5))
         save_steps = int(form.get("save_steps", 25))
         logging_steps = int(form.get("logging_steps", 1))
-        output_dir = form.get("output_dir", "./results")
+        output_dir = str(form.get("output_dir", "./results"))
         lora_r = int(form.get("lora_r", 16))
         lora_alpha = int(form.get("lora_alpha", 16))
         lora_dropout = float(form.get("lora_dropout", 0.0))
         
         # Validate file type
         allowed_extensions = ['.csv', '.json', '.jsonl']
+        if not data_file.filename:
+            raise HTTPException(status_code=400, detail="File must have a filename")
+        
         file_extension = os.path.splitext(data_file.filename)[1].lower()
         
         if file_extension not in allowed_extensions:
