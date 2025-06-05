@@ -57,36 +57,78 @@ class JobStatusResponse(BaseModel):
     logs: Optional[list] = None
     error: Optional[str] = None
 
-def validate_csv_data(df: pd.DataFrame) -> Dict[str, Any]:
-    """Validate CSV data format for training"""
+def validate_data_file(data: pd.DataFrame, file_type: str) -> Dict[str, Any]:
+    """Validate data format for training (supports CSV and JSON)"""
     required_columns = ['instruction', 'output']
     optional_columns = ['input']
     
     # Check if required columns exist
-    missing_columns = [col for col in required_columns if col not in df.columns]
+    missing_columns = [col for col in required_columns if col not in data.columns]
     if missing_columns:
         raise ValueError(f"Missing required columns: {missing_columns}")
     
     # Check for empty data
-    if len(df) == 0:
-        raise ValueError("CSV file is empty")
+    if len(data) == 0:
+        raise ValueError(f"{file_type.upper()} file is empty")
     
     # Check for null values in required columns
     null_counts = {}
     for col in required_columns:
-        null_count = df[col].isnull().sum()
+        null_count = data[col].isnull().sum()
         if null_count > 0:
             null_counts[col] = null_count
     
     return {
-        "total_rows": len(df),
-        "columns": list(df.columns),
+        "total_rows": len(data),
+        "columns": list(data.columns),
         "null_counts": null_counts,
-        "sample_data": df.head(3).to_dict('records')
+        "sample_data": data.head(3).to_dict('records'),
+        "file_type": file_type.upper()
     }
 
-def run_training_job_with_csv(job_id: str, csv_path: str, config: Dict[str, Any]):
-    """Run training with CSV data in a separate thread"""
+def load_data_file(file_path: str) -> tuple[pd.DataFrame, str]:
+    """Load data from CSV or JSON file"""
+    file_extension = os.path.splitext(file_path)[1].lower()
+    
+    if file_extension == '.csv':
+        df = pd.read_csv(file_path)
+        return df, 'csv'
+    
+    elif file_extension == '.json':
+        with open(file_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        # Handle different JSON structures
+        if isinstance(data, list):
+            # Array of objects: [{"instruction": "...", "output": "..."}, ...]
+            df = pd.DataFrame(data)
+        elif isinstance(data, dict):
+            # Check if it's object with arrays: {"instruction": [...], "output": [...]}
+            if all(isinstance(v, list) for v in data.values()):
+                df = pd.DataFrame(data)
+            else:
+                # Single object, convert to single-row DataFrame
+                df = pd.DataFrame([data])
+        else:
+            raise ValueError("Invalid JSON format. Expected array of objects or object with arrays.")
+        
+        return df, 'json'
+    
+    elif file_extension == '.jsonl':
+        # Handle JSONL (JSON Lines) format
+        data = []
+        with open(file_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                if line.strip():
+                    data.append(json.loads(line))
+        df = pd.DataFrame(data)
+        return df, 'jsonl'
+    
+    else:
+        raise ValueError(f"Unsupported file format: {file_extension}. Supported formats: .csv, .json, .jsonl")
+
+def run_training_job_with_data_file(job_id: str, data_file_path: str, config: Dict[str, Any]):
+    """Run training with data file (CSV/JSON) in a separate thread"""
     try:
         training_jobs[job_id]["status"] = "running"
         training_jobs[job_id]["started_at"] = datetime.now().isoformat()
@@ -95,8 +137,8 @@ def run_training_job_with_csv(job_id: str, csv_path: str, config: Dict[str, Any]
         log_server_thread = threading.Thread(target=start_log_monitoring, daemon=True)
         log_server_thread.start()
         
-        # Call training function with CSV and config
-        train_with_config(csv_path, config)
+        # Call training function with data file and config
+        train_with_config(data_file_path, config)
         
         training_jobs[job_id]["status"] = "completed"
         training_jobs[job_id]["completed_at"] = datetime.now().isoformat()
@@ -107,9 +149,9 @@ def run_training_job_with_csv(job_id: str, csv_path: str, config: Dict[str, Any]
         training_jobs[job_id]["error"] = str(e)
         training_jobs[job_id]["failed_at"] = datetime.now().isoformat()
     finally:
-        # Clean up temporary CSV file
-        if os.path.exists(csv_path):
-            os.remove(csv_path)
+        # Clean up temporary data file
+        if os.path.exists(data_file_path):
+            os.remove(data_file_path)
 
 def run_training_job(job_id: str, config: FinetuneRequest):
     """Run training in a separate thread (legacy method)"""
@@ -179,7 +221,7 @@ async def start_simple_finetuning(background_tasks: BackgroundTasks):
     }
 
 @app.post("/finetune")
-async def start_finetuning_with_csv(
+async def start_finetuning_with_data_file(
     background_tasks: BackgroundTasks,
     data_file: UploadFile = File(...),
     model_name: str = Form("unsloth/llama-3-8b-bnb-4bit"),
@@ -197,12 +239,18 @@ async def start_finetuning_with_csv(
     lora_alpha: int = Form(16),
     lora_dropout: float = Form(0.0)
 ):
-    """Start a new finetuning job with CSV data and configurable parameters"""
+    """Start a new finetuning job with CSV/JSON data and configurable parameters"""
     
     try:
         # Validate file type
-        if not data_file.filename.endswith('.csv'):
-            raise HTTPException(status_code=400, detail="File must be a CSV file")
+        allowed_extensions = ['.csv', '.json', '.jsonl']
+        file_extension = os.path.splitext(data_file.filename)[1].lower()
+        
+        if file_extension not in allowed_extensions:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"File must be one of: {', '.join(allowed_extensions)}. Got: {file_extension}"
+            )
         
         # Validate parameters
         if max_steps <= 0:
@@ -216,20 +264,20 @@ async def start_finetuning_with_csv(
         
         # Save uploaded file temporarily
         temp_dir = tempfile.mkdtemp()
-        temp_file_path = os.path.join(temp_dir, f"training_data_{uuid.uuid4().hex}.csv")
+        temp_file_path = os.path.join(temp_dir, f"training_data_{uuid.uuid4().hex}{file_extension}")
         
         with open(temp_file_path, "wb") as buffer:
             shutil.copyfileobj(data_file.file, buffer)
         
-        # Validate CSV data
+        # Load and validate data file
         try:
-            df = pd.read_csv(temp_file_path)
-            validation_result = validate_csv_data(df)
+            df, file_type = load_data_file(temp_file_path)
+            validation_result = validate_data_file(df, file_type)
         except Exception as e:
             # Clean up temp file
             if os.path.exists(temp_file_path):
                 os.remove(temp_file_path)
-            raise HTTPException(status_code=400, detail=f"Invalid CSV file: {str(e)}")
+            raise HTTPException(status_code=400, detail=f"Invalid {file_extension} file: {str(e)}")
         
         # Generate unique job ID
         job_id = str(uuid.uuid4())
@@ -262,13 +310,13 @@ async def start_finetuning_with_csv(
             "logs": []
         }
         
-        # Start training in background
-        background_tasks.add_task(run_training_job_with_csv, job_id, temp_file_path, config)
+        # Start training in background (rename function to be more generic)
+        background_tasks.add_task(run_training_job_with_data_file, job_id, temp_file_path, config)
         
         return {
             "job_id": job_id,
             "status": "queued",
-            "message": f"Finetuning job queued with {validation_result['total_rows']} training samples",
+            "message": f"Finetuning job queued with {validation_result['total_rows']} training samples from {validation_result['file_type']} file",
             "dashboard_url": "http://localhost:5000",
             "dataset_info": validation_result,
             "config": config

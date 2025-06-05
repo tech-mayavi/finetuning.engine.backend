@@ -38,10 +38,44 @@ def setup_model_and_tokenizer():
     
     return model, tokenizer
 
-def prepare_dataset_from_csv(csv_path: str, tokenizer):
-    """Prepare dataset from CSV file"""
-    # Load CSV data
-    df = pd.read_csv(csv_path)
+def prepare_dataset_from_file(file_path: str, tokenizer):
+    """Prepare dataset from CSV, JSON, or JSONL file"""
+    file_extension = os.path.splitext(file_path)[1].lower()
+    
+    if file_extension == '.csv':
+        # Load CSV data
+        df = pd.read_csv(file_path)
+    
+    elif file_extension == '.json':
+        # Load JSON data
+        with open(file_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        # Handle different JSON structures
+        if isinstance(data, list):
+            # Array of objects: [{"instruction": "...", "output": "..."}, ...]
+            df = pd.DataFrame(data)
+        elif isinstance(data, dict):
+            # Check if it's object with arrays: {"instruction": [...], "output": [...]}
+            if all(isinstance(v, list) for v in data.values()):
+                df = pd.DataFrame(data)
+            else:
+                # Single object, convert to single-row DataFrame
+                df = pd.DataFrame([data])
+        else:
+            raise ValueError("Invalid JSON format. Expected array of objects or object with arrays.")
+    
+    elif file_extension == '.jsonl':
+        # Load JSONL data
+        data = []
+        with open(file_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                if line.strip():
+                    data.append(json.loads(line))
+        df = pd.DataFrame(data)
+    
+    else:
+        raise ValueError(f"Unsupported file format: {file_extension}")
     
     def formatting_prompts_func(examples):
         instructions = examples["instruction"]
@@ -51,7 +85,7 @@ def prepare_dataset_from_csv(csv_path: str, tokenizer):
         
         for instruction, input_text, output in zip(instructions, inputs, outputs):
             text = f"### Instruction:\n{instruction}\n\n"
-            if input_text and str(input_text).strip():  # Only add input if it exists and is not empty
+            if input_text and str(input_text).strip() and str(input_text) != 'nan':  # Only add input if it exists and is not empty
                 text += f"### Input:\n{input_text}\n\n"
             text += f"### Response:\n{output}"
             texts.append(text)
@@ -63,6 +97,10 @@ def prepare_dataset_from_csv(csv_path: str, tokenizer):
     dataset = Dataset.from_pandas(df)
     dataset = dataset.map(formatting_prompts_func, batched=True)
     return dataset
+
+def prepare_dataset_from_csv(csv_path: str, tokenizer):
+    """Prepare dataset from CSV file (legacy function)"""
+    return prepare_dataset_from_file(csv_path, tokenizer)
 
 def prepare_dataset(tokenizer):
     """Prepare your dataset (legacy method)"""
@@ -183,10 +221,11 @@ def train_with_config(csv_path: str = None, config: dict = None):
     with open('training_logs.jsonl', 'a') as f:
         f.write(json.dumps(log_entry) + '\n')
     
-    # Prepare dataset (CSV or default)
+    # Prepare dataset (file or default)
     if csv_path and os.path.exists(csv_path):
-        dataset = prepare_dataset_from_csv(csv_path, tokenizer)
-        dataset_source = f"CSV file: {os.path.basename(csv_path)}"
+        dataset = prepare_dataset_from_file(csv_path, tokenizer)
+        file_extension = os.path.splitext(csv_path)[1].upper()
+        dataset_source = f"{file_extension[1:]} file: {os.path.basename(csv_path)}"
     else:
         dataset = prepare_dataset(tokenizer)
         dataset_source = "Default HuggingFace dataset"
