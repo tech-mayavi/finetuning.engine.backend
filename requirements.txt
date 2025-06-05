@@ -2,6 +2,8 @@ fastapi
 uvicorn[standard]
 pydantic
 flask
+pandas
+python-multipart
 unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git
 torch
 transformers

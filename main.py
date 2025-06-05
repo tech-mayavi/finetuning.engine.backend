@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, File, Form
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
 import asyncio
@@ -7,9 +7,12 @@ import json
 import os
 from datetime import datetime
 import uuid
+import pandas as pd
+import tempfile
+import shutil
 
 # Import the training functionality
-from train_with_logging import main as train_main, start_log_monitoring
+from train_with_logging import train_with_config, start_log_monitoring
 
 app = FastAPI(
     title="Model Finetuning API",
@@ -54,8 +57,36 @@ class JobStatusResponse(BaseModel):
     logs: Optional[list] = None
     error: Optional[str] = None
 
-def run_training_job(job_id: str, config: FinetuneRequest):
-    """Run training in a separate thread"""
+def validate_csv_data(df: pd.DataFrame) -> Dict[str, Any]:
+    """Validate CSV data format for training"""
+    required_columns = ['instruction', 'output']
+    optional_columns = ['input']
+    
+    # Check if required columns exist
+    missing_columns = [col for col in required_columns if col not in df.columns]
+    if missing_columns:
+        raise ValueError(f"Missing required columns: {missing_columns}")
+    
+    # Check for empty data
+    if len(df) == 0:
+        raise ValueError("CSV file is empty")
+    
+    # Check for null values in required columns
+    null_counts = {}
+    for col in required_columns:
+        null_count = df[col].isnull().sum()
+        if null_count > 0:
+            null_counts[col] = null_count
+    
+    return {
+        "total_rows": len(df),
+        "columns": list(df.columns),
+        "null_counts": null_counts,
+        "sample_data": df.head(3).to_dict('records')
+    }
+
+def run_training_job_with_csv(job_id: str, csv_path: str, config: Dict[str, Any]):
+    """Run training with CSV data in a separate thread"""
     try:
         training_jobs[job_id]["status"] = "running"
         training_jobs[job_id]["started_at"] = datetime.now().isoformat()
@@ -64,11 +95,35 @@ def run_training_job(job_id: str, config: FinetuneRequest):
         log_server_thread = threading.Thread(target=start_log_monitoring, daemon=True)
         log_server_thread.start()
         
-        # Update the training configuration (this would need to be passed to the training function)
-        # For now, we'll call the existing main function
-        # In a production setup, you'd want to modify train_with_logging.py to accept parameters
+        # Call training function with CSV and config
+        train_with_config(csv_path, config)
         
-        train_main()
+        training_jobs[job_id]["status"] = "completed"
+        training_jobs[job_id]["completed_at"] = datetime.now().isoformat()
+        training_jobs[job_id]["message"] = "Training completed successfully"
+        
+    except Exception as e:
+        training_jobs[job_id]["status"] = "failed"
+        training_jobs[job_id]["error"] = str(e)
+        training_jobs[job_id]["failed_at"] = datetime.now().isoformat()
+    finally:
+        # Clean up temporary CSV file
+        if os.path.exists(csv_path):
+            os.remove(csv_path)
+
+def run_training_job(job_id: str, config: FinetuneRequest):
+    """Run training in a separate thread (legacy method)"""
+    try:
+        training_jobs[job_id]["status"] = "running"
+        training_jobs[job_id]["started_at"] = datetime.now().isoformat()
+        
+        # Start log monitoring server
+        log_server_thread = threading.Thread(target=start_log_monitoring, daemon=True)
+        log_server_thread.start()
+        
+        # Convert to dict and call new training function
+        config_dict = config.dict()
+        train_with_config(None, config_dict)
         
         training_jobs[job_id]["status"] = "completed"
         training_jobs[job_id]["completed_at"] = datetime.now().isoformat()
@@ -123,9 +178,110 @@ async def start_simple_finetuning(background_tasks: BackgroundTasks):
         "dashboard_url": "http://localhost:5000"
     }
 
-@app.post("/finetune", response_model=FinetuneResponse)
-async def start_finetuning(request: FinetuneRequest, background_tasks: BackgroundTasks):
-    """Start a new finetuning job"""
+@app.post("/finetune")
+async def start_finetuning_with_csv(
+    background_tasks: BackgroundTasks,
+    data_file: UploadFile = File(...),
+    model_name: str = Form("unsloth/llama-3-8b-bnb-4bit"),
+    max_seq_length: int = Form(2048),
+    num_train_epochs: int = Form(3),
+    per_device_train_batch_size: int = Form(2),
+    gradient_accumulation_steps: int = Form(4),
+    learning_rate: float = Form(2e-4),
+    max_steps: int = Form(60),
+    warmup_steps: int = Form(5),
+    save_steps: int = Form(25),
+    logging_steps: int = Form(1),
+    output_dir: str = Form("./results"),
+    lora_r: int = Form(16),
+    lora_alpha: int = Form(16),
+    lora_dropout: float = Form(0.0)
+):
+    """Start a new finetuning job with CSV data and configurable parameters"""
+    
+    try:
+        # Validate file type
+        if not data_file.filename.endswith('.csv'):
+            raise HTTPException(status_code=400, detail="File must be a CSV file")
+        
+        # Validate parameters
+        if max_steps <= 0:
+            raise HTTPException(status_code=400, detail="max_steps must be greater than 0")
+        
+        if num_train_epochs <= 0:
+            raise HTTPException(status_code=400, detail="num_train_epochs must be greater than 0")
+        
+        if learning_rate <= 0 or learning_rate > 1:
+            raise HTTPException(status_code=400, detail="learning_rate must be between 0 and 1")
+        
+        # Save uploaded file temporarily
+        temp_dir = tempfile.mkdtemp()
+        temp_file_path = os.path.join(temp_dir, f"training_data_{uuid.uuid4().hex}.csv")
+        
+        with open(temp_file_path, "wb") as buffer:
+            shutil.copyfileobj(data_file.file, buffer)
+        
+        # Validate CSV data
+        try:
+            df = pd.read_csv(temp_file_path)
+            validation_result = validate_csv_data(df)
+        except Exception as e:
+            # Clean up temp file
+            if os.path.exists(temp_file_path):
+                os.remove(temp_file_path)
+            raise HTTPException(status_code=400, detail=f"Invalid CSV file: {str(e)}")
+        
+        # Generate unique job ID
+        job_id = str(uuid.uuid4())
+        
+        # Prepare configuration
+        config = {
+            "model_name": model_name,
+            "max_seq_length": max_seq_length,
+            "num_train_epochs": num_train_epochs,
+            "per_device_train_batch_size": per_device_train_batch_size,
+            "gradient_accumulation_steps": gradient_accumulation_steps,
+            "learning_rate": learning_rate,
+            "max_steps": max_steps,
+            "warmup_steps": warmup_steps,
+            "save_steps": save_steps,
+            "logging_steps": logging_steps,
+            "output_dir": output_dir,
+            "lora_r": lora_r,
+            "lora_alpha": lora_alpha,
+            "lora_dropout": lora_dropout
+        }
+        
+        # Initialize job tracking
+        training_jobs[job_id] = {
+            "id": job_id,
+            "status": "queued",
+            "config": config,
+            "dataset_info": validation_result,
+            "created_at": datetime.now().isoformat(),
+            "logs": []
+        }
+        
+        # Start training in background
+        background_tasks.add_task(run_training_job_with_csv, job_id, temp_file_path, config)
+        
+        return {
+            "job_id": job_id,
+            "status": "queued",
+            "message": f"Finetuning job queued with {validation_result['total_rows']} training samples",
+            "dashboard_url": "http://localhost:5000",
+            "dataset_info": validation_result,
+            "config": config
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error starting training job: {str(e)}")
+
+@app.post("/finetune-legacy", response_model=FinetuneResponse)
+async def start_finetuning_legacy(request: FinetuneRequest, background_tasks: BackgroundTasks):
+    """Start a new finetuning job (legacy endpoint without CSV upload)"""
     
     try:
         # Validate request parameters
