@@ -8,6 +8,7 @@ from datasets import load_dataset
 from transformers import TrainingArguments
 from trl import SFTTrainer
 import torch
+import pandas as pd
 
 # Import our custom logging callback
 from log_monitor import DetailedLoggingCallback, start_log_monitoring
@@ -18,7 +19,7 @@ def setup_model_and_tokenizer():
         model_name="unsloth/llama-3-8b-bnb-4bit",
         max_seq_length=2048,
         dtype=None,
-        load_in_4bit=True,
+        load_in_4bit=False,
     )
     
     model = FastLanguageModel.get_peft_model(
@@ -40,7 +41,7 @@ def setup_model_and_tokenizer():
 def prepare_dataset(tokenizer):
     """Prepare your dataset"""
     # Replace with your actual dataset loading
-    dataset = load_dataset("your_dataset", split="train")
+    dataset = load_dataset("your_dataset", split="train", token="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")
     
     def formatting_prompts_func(examples):
         instructions = examples["instruction"]
