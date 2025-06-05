@@ -1,5 +1,7 @@
 from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, File, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from typing import Optional, Dict, Any, Union
 import asyncio
@@ -14,7 +16,7 @@ import shutil
 import base64
 
 # Import the training functionality
-from train_with_logging import train_with_config, start_log_monitoring
+from train_with_logging import train_with_config
 
 app = FastAPI(
     title="Model Finetuning API",
@@ -166,10 +168,6 @@ def run_training_job_with_data_file(job_id: str, data_file_path: str, config: Di
         training_jobs[job_id]["status"] = "running"
         training_jobs[job_id]["started_at"] = datetime.now().isoformat()
         
-        # Start log monitoring server
-        log_server_thread = threading.Thread(target=start_log_monitoring, daemon=True)
-        log_server_thread.start()
-        
         # Call training function with data file and config
         train_with_config(data_file_path, config)
         
@@ -191,10 +189,6 @@ def run_training_job(job_id: str, config: FinetuneRequest):
     try:
         training_jobs[job_id]["status"] = "running"
         training_jobs[job_id]["started_at"] = datetime.now().isoformat()
-        
-        # Start log monitoring server
-        log_server_thread = threading.Thread(target=start_log_monitoring, daemon=True)
-        log_server_thread.start()
         
         # Convert to dict and call new training function
         config_dict = config.dict()
@@ -250,7 +244,7 @@ async def start_simple_finetuning(background_tasks: BackgroundTasks):
         "job_id": job_id,
         "status": "queued",
         "message": "Simple finetuning job started with default parameters",
-        "dashboard_url": "http://localhost:5000"
+        "dashboard_url": "http://localhost:8000/dashboard"
     }
 
 @app.post("/finetune")
@@ -384,7 +378,7 @@ async def handle_multipart_request(request: Request, background_tasks: Backgroun
             "job_id": job_id,
             "status": "queued",
             "message": f"Finetuning job queued with {validation_result['total_rows']} training samples from {validation_result['file_type']} file (multipart upload)",
-            "dashboard_url": "http://localhost:5000",
+            "dashboard_url": "http://localhost:8000/dashboard",
             "dataset_info": validation_result,
             "config": config
         }
@@ -482,7 +476,7 @@ async def handle_base64_request(request: Request, background_tasks: BackgroundTa
             "job_id": job_id,
             "status": "queued",
             "message": f"Finetuning job queued with {validation_result['total_rows']} training samples from {validation_result['file_type']} content (base64 upload)",
-            "dashboard_url": "http://localhost:5000",
+            "dashboard_url": "http://localhost:8000/dashboard",
             "dataset_info": validation_result,
             "config": config
         }
@@ -526,7 +520,7 @@ async def start_finetuning_legacy(request: FinetuneRequest, background_tasks: Ba
             job_id=job_id,
             status="queued",
             message="Finetuning job has been queued and will start shortly",
-            dashboard_url="http://localhost:5000"
+            dashboard_url="http://localhost:8000/dashboard"
         )
         
     except HTTPException:
@@ -588,11 +582,225 @@ async def get_job_logs(job_id: str):
         "logs": logs
     }
 
-@app.get("/dashboard")
+# Monitoring API endpoints (moved from Flask to FastAPI)
+@app.get("/api/logs")
+async def get_training_logs():
+    """API endpoint to get training logs"""
+    logs = []
+    if os.path.exists('training_logs.jsonl'):
+        try:
+            with open('training_logs.jsonl', 'r') as f:
+                logs = [json.loads(line) for line in f.readlines()]
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Error reading logs: {str(e)}")
+    
+    return {"logs": logs}
+
+@app.get("/api/status")
+async def get_training_status():
+    """API endpoint to get training status"""
+    status = {
+        "status": "running",
+        "timestamp": datetime.now().isoformat(),
+        "log_count": 0
+    }
+    
+    if os.path.exists('training_logs.jsonl'):
+        try:
+            with open('training_logs.jsonl', 'r') as f:
+                lines = f.readlines()
+                status["log_count"] = len(lines)
+                
+                if lines:
+                    last_log = json.loads(lines[-1])
+                    status["last_update"] = last_log.get("timestamp")
+                    status["current_step"] = last_log.get("step", 0)
+                    status["current_epoch"] = last_log.get("epoch", 0)
+                    
+                    if last_log.get("type") == "training_complete":
+                        status["status"] = "completed"
+        except Exception:
+            pass
+    
+    return status
+
+@app.get("/dashboard", response_class=HTMLResponse)
+async def get_dashboard():
+    """Serve the training dashboard"""
+    dashboard_html = '''
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Training Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        .status-card { background: #f5f5f5; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
+        .charts-container { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px; }
+        .chart-container { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .logs-container { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .log-entry { padding: 8px; border-bottom: 1px solid #eee; font-family: monospace; font-size: 12px; }
+        .log-info { color: #2196F3; }
+        .log-error { color: #f44336; }
+        .log-debug { color: #9E9E9E; }
+        #status { font-size: 18px; font-weight: bold; }
+        .running { color: #4CAF50; }
+        .completed { color: #2196F3; }
+        .failed { color: #f44336; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Model Training Dashboard</h1>
+        
+        <div class="status-card">
+            <h2>Training Status</h2>
+            <div id="status">Loading...</div>
+            <div id="progress"></div>
+        </div>
+        
+        <div class="charts-container">
+            <div class="chart-container">
+                <h3>Training Loss</h3>
+                <canvas id="lossChart"></canvas>
+            </div>
+            <div class="chart-container">
+                <h3>Learning Rate</h3>
+                <canvas id="lrChart"></canvas>
+            </div>
+        </div>
+        
+        <div class="logs-container">
+            <h3>Recent Logs</h3>
+            <div id="logs" style="height: 300px; overflow-y: auto;"></div>
+        </div>
+    </div>
+
+    <script>
+        let lossChart, lrChart;
+        
+        function initCharts() {
+            const lossCtx = document.getElementById('lossChart').getContext('2d');
+            lossChart = new Chart(lossCtx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'Training Loss',
+                        data: [],
+                        borderColor: 'rgb(75, 192, 192)',
+                        tension: 0.1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        y: {
+                            beginAtZero: false
+                        }
+                    }
+                }
+            });
+            
+            const lrCtx = document.getElementById('lrChart').getContext('2d');
+            lrChart = new Chart(lrCtx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'Learning Rate',
+                        data: [],
+                        borderColor: 'rgb(255, 99, 132)',
+                        tension: 0.1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        y: {
+                            beginAtZero: true
+                        }
+                    }
+                }
+            });
+        }
+        
+        function updateDashboard() {
+            fetch('/api/status')
+                .then(response => response.json())
+                .then(data => {
+                    const statusEl = document.getElementById('status');
+                    statusEl.textContent = `Status: ${data.status}`;
+                    statusEl.className = data.status;
+                    
+                    const progressEl = document.getElementById('progress');
+                    progressEl.innerHTML = `
+                        <p>Current Step: ${data.current_step || 0}</p>
+                        <p>Current Epoch: ${data.current_epoch || 0}</p>
+                        <p>Last Update: ${data.last_update || 'N/A'}</p>
+                        <p>Total Logs: ${data.log_count}</p>
+                    `;
+                });
+            
+            fetch('/api/logs')
+                .then(response => response.json())
+                .then(data => {
+                    updateCharts(data.logs);
+                    updateLogs(data.logs);
+                });
+        }
+        
+        function updateCharts(logs) {
+            const lossData = [];
+            const lrData = [];
+            const labels = [];
+            
+            logs.forEach(log => {
+                if (log.type === 'training_step' && log.loss !== undefined) {
+                    labels.push(log.step);
+                    lossData.push(log.loss);
+                    lrData.push(log.learning_rate);
+                }
+            });
+            
+            lossChart.data.labels = labels;
+            lossChart.data.datasets[0].data = lossData;
+            lossChart.update();
+            
+            lrChart.data.labels = labels;
+            lrChart.data.datasets[0].data = lrData;
+            lrChart.update();
+        }
+        
+        function updateLogs(logs) {
+            const logsEl = document.getElementById('logs');
+            const recentLogs = logs.slice(-20).reverse();
+            
+            logsEl.innerHTML = recentLogs.map(log => `
+                <div class="log-entry log-${log.level.toLowerCase()}">
+                    [${log.timestamp}] ${log.level}: ${log.message}
+                </div>
+            `).join('');
+        }
+        
+        // Initialize
+        initCharts();
+        updateDashboard();
+        
+        // Update every 2 seconds
+        setInterval(updateDashboard, 2000);
+    </script>
+</body>
+</html>
+    '''
+    return dashboard_html
+
+@app.get("/dashboard-info")
 async def get_dashboard_info():
     """Get dashboard information"""
     return {
-        "dashboard_url": "http://localhost:5000",
+        "dashboard_url": "http://localhost:8000/dashboard",
         "status": "available",
         "description": "Real-time training monitoring dashboard"
     }

@@ -11,7 +11,7 @@ import torch
 import pandas as pd
 
 # Import our custom logging callback
-from log_monitor import DetailedLoggingCallback, start_log_monitoring
+from log_monitor import DetailedLoggingCallback
 
 def setup_model_and_tokenizer():
     """Setup Unsloth model and tokenizer"""
@@ -148,7 +148,7 @@ def train_with_config(csv_path: str = None, config: dict = None):
         }
     
     print("Starting training with real-time logging...")
-    print("Dashboard available at: http://localhost:5000")
+    print("Dashboard available at: http://localhost:8000/dashboard")
     
     # Log configuration
     log_entry = {
