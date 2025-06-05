@@ -1,6 +1,6 @@
-from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, File, Form, Request
 from pydantic import BaseModel
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Union
 import asyncio
 import threading
 import json
@@ -10,6 +10,7 @@ import uuid
 import pandas as pd
 import tempfile
 import shutil
+import base64
 
 # Import the training functionality
 from train_with_logging import train_with_config, start_log_monitoring
@@ -25,6 +26,28 @@ training_jobs: Dict[str, Dict[str, Any]] = {}
 
 class FinetuneRequest(BaseModel):
     dataset_name: Optional[str] = "alpaca"  # Made optional with default
+    model_name: Optional[str] = "unsloth/llama-3-8b-bnb-4bit"
+    max_seq_length: Optional[int] = 2048
+    num_train_epochs: Optional[int] = 3
+    per_device_train_batch_size: Optional[int] = 2
+    gradient_accumulation_steps: Optional[int] = 4
+    learning_rate: Optional[float] = 2e-4
+    max_steps: Optional[int] = 60
+    warmup_steps: Optional[int] = 5
+    save_steps: Optional[int] = 25
+    logging_steps: Optional[int] = 1
+    output_dir: Optional[str] = "./results"
+    lora_r: Optional[int] = 16
+    lora_alpha: Optional[int] = 16
+    lora_dropout: Optional[float] = 0.0
+    
+    class Config:
+        # Allow extra fields to be ignored
+        extra = "ignore"
+
+class FinetuneBase64Request(BaseModel):
+    file_content: str  # base64 encoded file content
+    file_type: str     # "csv", "json", "jsonl"
     model_name: Optional[str] = "unsloth/llama-3-8b-bnb-4bit"
     max_seq_length: Optional[int] = 2048
     num_train_epochs: Optional[int] = 3
@@ -221,27 +244,53 @@ async def start_simple_finetuning(background_tasks: BackgroundTasks):
     }
 
 @app.post("/finetune")
-async def start_finetuning_with_data_file(
-    background_tasks: BackgroundTasks,
-    data_file: UploadFile = File(...),
-    model_name: str = Form("unsloth/llama-3-8b-bnb-4bit"),
-    max_seq_length: int = Form(2048),
-    num_train_epochs: int = Form(3),
-    per_device_train_batch_size: int = Form(2),
-    gradient_accumulation_steps: int = Form(4),
-    learning_rate: float = Form(2e-4),
-    max_steps: int = Form(60),
-    warmup_steps: int = Form(5),
-    save_steps: int = Form(25),
-    logging_steps: int = Form(1),
-    output_dir: str = Form("./results"),
-    lora_r: int = Form(16),
-    lora_alpha: int = Form(16),
-    lora_dropout: float = Form(0.0)
+async def start_finetuning_hybrid(
+    request: Request,
+    background_tasks: BackgroundTasks
 ):
-    """Start a new finetuning job with CSV/JSON data and configurable parameters"""
+    """Hybrid endpoint: Start finetuning with either multipart file upload or base64 JSON"""
     
+    content_type = request.headers.get("content-type", "")
+    
+    if content_type.startswith("multipart/form-data"):
+        # Handle multipart file upload
+        return await handle_multipart_request(request, background_tasks)
+    elif content_type.startswith("application/json"):
+        # Handle base64 JSON request
+        return await handle_base64_request(request, background_tasks)
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="Content-Type must be either 'multipart/form-data' or 'application/json'"
+        )
+
+async def handle_multipart_request(request: Request, background_tasks: BackgroundTasks):
+    """Handle multipart file upload request"""
     try:
+        # Parse multipart form data
+        form = await request.form()
+        
+        # Extract file
+        data_file = form.get("data_file")
+        if not data_file:
+            raise HTTPException(status_code=400, detail="data_file is required")
+        
+        # Extract parameters with defaults
+        model_name = form.get("model_name", "unsloth/llama-3-8b-bnb-4bit")
+        max_seq_length = int(form.get("max_seq_length", 2048))
+        num_train_epochs = int(form.get("num_train_epochs", 3))
+        per_device_train_batch_size = int(form.get("per_device_train_batch_size", 2))
+        gradient_accumulation_steps = int(form.get("gradient_accumulation_steps", 4))
+        learning_rate = float(form.get("learning_rate", 2e-4))
+        max_steps = int(form.get("max_steps", 60))
+        warmup_steps = int(form.get("warmup_steps", 5))
+        save_steps = int(form.get("save_steps", 25))
+        logging_steps = int(form.get("logging_steps", 1))
+        output_dir = form.get("output_dir", "./results")
+        lora_r = int(form.get("lora_r", 16))
+        lora_alpha = int(form.get("lora_alpha", 16))
+        lora_dropout = float(form.get("lora_dropout", 0.0))
+        
         # Validate file type
         allowed_extensions = ['.csv', '.json', '.jsonl']
         file_extension = os.path.splitext(data_file.filename)[1].lower()
@@ -307,16 +356,17 @@ async def start_finetuning_with_data_file(
             "config": config,
             "dataset_info": validation_result,
             "created_at": datetime.now().isoformat(),
-            "logs": []
+            "logs": [],
+            "upload_method": "multipart"
         }
         
-        # Start training in background (rename function to be more generic)
+        # Start training in background
         background_tasks.add_task(run_training_job_with_data_file, job_id, temp_file_path, config)
         
         return {
             "job_id": job_id,
             "status": "queued",
-            "message": f"Finetuning job queued with {validation_result['total_rows']} training samples from {validation_result['file_type']} file",
+            "message": f"Finetuning job queued with {validation_result['total_rows']} training samples from {validation_result['file_type']} file (multipart upload)",
             "dashboard_url": "http://localhost:5000",
             "dataset_info": validation_result,
             "config": config
@@ -325,7 +375,105 @@ async def start_finetuning_with_data_file(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error starting training job: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error processing multipart request: {str(e)}")
+
+async def handle_base64_request(request: Request, background_tasks: BackgroundTasks):
+    """Handle base64 JSON request"""
+    try:
+        # Parse JSON body
+        body = await request.json()
+        base64_request = FinetuneBase64Request(**body)
+        
+        # Validate file type
+        allowed_file_types = ['csv', 'json', 'jsonl']
+        if base64_request.file_type.lower() not in allowed_file_types:
+            raise HTTPException(
+                status_code=400,
+                detail=f"file_type must be one of: {', '.join(allowed_file_types)}. Got: {base64_request.file_type}"
+            )
+        
+        # Validate parameters
+        if base64_request.max_steps <= 0:
+            raise HTTPException(status_code=400, detail="max_steps must be greater than 0")
+        
+        if base64_request.num_train_epochs <= 0:
+            raise HTTPException(status_code=400, detail="num_train_epochs must be greater than 0")
+        
+        if base64_request.learning_rate <= 0 or base64_request.learning_rate > 1:
+            raise HTTPException(status_code=400, detail="learning_rate must be between 0 and 1")
+        
+        # Decode base64 content
+        try:
+            file_content = base64.b64decode(base64_request.file_content)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid base64 encoding: {str(e)}")
+        
+        # Create temporary file
+        temp_dir = tempfile.mkdtemp()
+        file_extension = f".{base64_request.file_type.lower()}"
+        temp_file_path = os.path.join(temp_dir, f"training_data_{uuid.uuid4().hex}{file_extension}")
+        
+        with open(temp_file_path, "wb") as f:
+            f.write(file_content)
+        
+        # Load and validate data file
+        try:
+            df, file_type = load_data_file(temp_file_path)
+            validation_result = validate_data_file(df, file_type)
+        except Exception as e:
+            # Clean up temp file
+            if os.path.exists(temp_file_path):
+                os.remove(temp_file_path)
+            raise HTTPException(status_code=400, detail=f"Invalid {base64_request.file_type} content: {str(e)}")
+        
+        # Generate unique job ID
+        job_id = str(uuid.uuid4())
+        
+        # Prepare configuration
+        config = {
+            "model_name": base64_request.model_name,
+            "max_seq_length": base64_request.max_seq_length,
+            "num_train_epochs": base64_request.num_train_epochs,
+            "per_device_train_batch_size": base64_request.per_device_train_batch_size,
+            "gradient_accumulation_steps": base64_request.gradient_accumulation_steps,
+            "learning_rate": base64_request.learning_rate,
+            "max_steps": base64_request.max_steps,
+            "warmup_steps": base64_request.warmup_steps,
+            "save_steps": base64_request.save_steps,
+            "logging_steps": base64_request.logging_steps,
+            "output_dir": base64_request.output_dir,
+            "lora_r": base64_request.lora_r,
+            "lora_alpha": base64_request.lora_alpha,
+            "lora_dropout": base64_request.lora_dropout
+        }
+        
+        # Initialize job tracking
+        training_jobs[job_id] = {
+            "id": job_id,
+            "status": "queued",
+            "config": config,
+            "dataset_info": validation_result,
+            "created_at": datetime.now().isoformat(),
+            "logs": [],
+            "upload_method": "base64"
+        }
+        
+        # Start training in background
+        background_tasks.add_task(run_training_job_with_data_file, job_id, temp_file_path, config)
+        
+        return {
+            "job_id": job_id,
+            "status": "queued",
+            "message": f"Finetuning job queued with {validation_result['total_rows']} training samples from {validation_result['file_type']} content (base64 upload)",
+            "dashboard_url": "http://localhost:5000",
+            "dataset_info": validation_result,
+            "config": config
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error processing base64 request: {str(e)}")
 
 @app.post("/finetune-legacy", response_model=FinetuneResponse)
 async def start_finetuning_legacy(request: FinetuneRequest, background_tasks: BackgroundTasks):
