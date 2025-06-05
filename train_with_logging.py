@@ -68,11 +68,59 @@ def main():
     print("Starting training with real-time logging...")
     print("Dashboard available at: http://localhost:5000")
     
+    # Log initialization steps
+    log_entry = {
+        "timestamp": datetime.now().isoformat(),
+        "type": "setup_start",
+        "level": "INFO",
+        "message": "🔧 Setting up model and tokenizer...",
+        "step": 0,
+        "epoch": 0
+    }
+    with open('training_logs.jsonl', 'a') as f:
+        f.write(json.dumps(log_entry) + '\n')
+    
     # Setup model
     model, tokenizer = setup_model_and_tokenizer()
     
+    # Log model setup completion
+    log_entry = {
+        "timestamp": datetime.now().isoformat(),
+        "type": "model_loaded",
+        "level": "INFO",
+        "message": "✅ Model and tokenizer loaded successfully",
+        "step": 0,
+        "epoch": 0
+    }
+    with open('training_logs.jsonl', 'a') as f:
+        f.write(json.dumps(log_entry) + '\n')
+    
+    # Log dataset preparation
+    log_entry = {
+        "timestamp": datetime.now().isoformat(),
+        "type": "dataset_prep",
+        "level": "INFO",
+        "message": "📊 Preparing dataset...",
+        "step": 0,
+        "epoch": 0
+    }
+    with open('training_logs.jsonl', 'a') as f:
+        f.write(json.dumps(log_entry) + '\n')
+    
     # Prepare dataset
     dataset = prepare_dataset(tokenizer)
+    
+    # Log dataset preparation completion
+    log_entry = {
+        "timestamp": datetime.now().isoformat(),
+        "type": "dataset_ready",
+        "level": "INFO",
+        "message": "✅ Dataset prepared and ready for training",
+        "step": 0,
+        "epoch": 0
+    }
+    with open('training_logs.jsonl', 'a') as f:
+        f.write(json.dumps(log_entry) + '\n')
     
     # Training arguments with detailed logging
     training_args = TrainingArguments(

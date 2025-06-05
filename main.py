@@ -21,7 +21,7 @@ app = FastAPI(
 training_jobs: Dict[str, Dict[str, Any]] = {}
 
 class FinetuneRequest(BaseModel):
-    dataset_name: str
+    dataset_name: Optional[str] = "alpaca"  # Made optional with default
     model_name: Optional[str] = "unsloth/llama-3-8b-bnb-4bit"
     max_seq_length: Optional[int] = 2048
     num_train_epochs: Optional[int] = 3
@@ -36,6 +36,10 @@ class FinetuneRequest(BaseModel):
     lora_r: Optional[int] = 16
     lora_alpha: Optional[int] = 16
     lora_dropout: Optional[float] = 0.0
+    
+    class Config:
+        # Allow extra fields to be ignored
+        extra = "ignore"
 
 class FinetuneResponse(BaseModel):
     job_id: str
@@ -90,9 +94,12 @@ async def root():
         }
     }
 
-@app.post("/finetune", response_model=FinetuneResponse)
-async def start_finetuning(request: FinetuneRequest, background_tasks: BackgroundTasks):
-    """Start a new finetuning job"""
+@app.post("/finetune-simple")
+async def start_simple_finetuning(background_tasks: BackgroundTasks):
+    """Start a simple finetuning job with default parameters"""
+    
+    # Create default request
+    request = FinetuneRequest()
     
     # Generate unique job ID
     job_id = str(uuid.uuid4())
@@ -109,12 +116,54 @@ async def start_finetuning(request: FinetuneRequest, background_tasks: Backgroun
     # Start training in background
     background_tasks.add_task(run_training_job, job_id, request)
     
-    return FinetuneResponse(
-        job_id=job_id,
-        status="queued",
-        message="Finetuning job has been queued and will start shortly",
-        dashboard_url="http://localhost:5000"
-    )
+    return {
+        "job_id": job_id,
+        "status": "queued",
+        "message": "Simple finetuning job started with default parameters",
+        "dashboard_url": "http://localhost:5000"
+    }
+
+@app.post("/finetune", response_model=FinetuneResponse)
+async def start_finetuning(request: FinetuneRequest, background_tasks: BackgroundTasks):
+    """Start a new finetuning job"""
+    
+    try:
+        # Validate request parameters
+        if request.max_steps and request.max_steps <= 0:
+            raise HTTPException(status_code=400, detail="max_steps must be greater than 0")
+        
+        if request.num_train_epochs and request.num_train_epochs <= 0:
+            raise HTTPException(status_code=400, detail="num_train_epochs must be greater than 0")
+        
+        if request.learning_rate and (request.learning_rate <= 0 or request.learning_rate > 1):
+            raise HTTPException(status_code=400, detail="learning_rate must be between 0 and 1")
+        
+        # Generate unique job ID
+        job_id = str(uuid.uuid4())
+        
+        # Initialize job tracking
+        training_jobs[job_id] = {
+            "id": job_id,
+            "status": "queued",
+            "config": request.dict(),
+            "created_at": datetime.now().isoformat(),
+            "logs": []
+        }
+        
+        # Start training in background
+        background_tasks.add_task(run_training_job, job_id, request)
+        
+        return FinetuneResponse(
+            job_id=job_id,
+            status="queued",
+            message="Finetuning job has been queued and will start shortly",
+            dashboard_url="http://localhost:5000"
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error starting training job: {str(e)}")
 
 @app.get("/jobs/{job_id}", response_model=JobStatusResponse)
 async def get_job_status(job_id: str):
