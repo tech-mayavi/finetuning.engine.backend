@@ -1,0 +1,12 @@
+fastapi
+uvicorn[standard]
+pydantic
+flask
+unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git
+torch
+transformers
+datasets
+trl
+accelerate
+bitsandbytes
+xformers
