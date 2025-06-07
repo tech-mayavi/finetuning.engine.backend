@@ -4,8 +4,9 @@ import torch
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 from unsloth import FastLanguageModel
-from transformers import TextStreamer
+from transformers import TextStreamer, TextIteratorStreamer
 import gc
+from threading import Thread
 
 class ModelManager:
     """Manages loading, unloading, and inference with fine-tuned models"""
@@ -264,6 +265,89 @@ class ModelManager:
                 "response": ""
             }
     
+    def generate_response_stream(self, 
+                               message: str, 
+                               max_tokens: int = 150, 
+                               temperature: float = 0.7,
+                               do_sample: bool = True):
+        """Generate a streaming response using the loaded model"""
+        
+        if self.current_model is None or self.current_tokenizer is None:
+            yield json.dumps({
+                "status": "error",
+                "message": "No model currently loaded. Please load a model first.",
+                "token": "",
+                "done": True
+            })
+            return
+        
+        try:
+            # Format the prompt
+            prompt = f"### Instruction:\n{message}\n\n### Response:\n"
+            
+            # Tokenize
+            inputs = self.current_tokenizer(
+                prompt, 
+                return_tensors="pt",
+                truncation=True,
+                max_length=2048
+            )
+            
+            # Get model device and move inputs to the same device
+            model_device = self._get_model_device()
+            inputs = {key: value.to(model_device) for key, value in inputs.items()}
+            
+            # Create streamer
+            streamer = TextIteratorStreamer(
+                self.current_tokenizer, 
+                timeout=10.0, 
+                skip_prompt=True, 
+                skip_special_tokens=True
+            )
+            
+            # Generation parameters
+            generation_kwargs = {
+                **inputs,
+                "max_new_tokens": max_tokens,
+                "temperature": temperature,
+                "do_sample": do_sample,
+                "pad_token_id": self.current_tokenizer.eos_token_id,
+                "eos_token_id": self.current_tokenizer.eos_token_id,
+                "streamer": streamer
+            }
+            
+            # Start generation in a separate thread
+            thread = Thread(target=self.current_model.generate, kwargs=generation_kwargs)
+            thread.start()
+            
+            # Stream tokens as they are generated
+            generated_text = ""
+            for new_text in streamer:
+                if new_text:
+                    generated_text += new_text
+                    yield json.dumps({
+                        "status": "streaming",
+                        "token": new_text,
+                        "generated_text": generated_text,
+                        "done": False
+                    })
+            
+            # Signal completion
+            yield json.dumps({
+                "status": "completed",
+                "token": "",
+                "generated_text": generated_text,
+                "done": True
+            })
+            
+        except Exception as e:
+            yield json.dumps({
+                "status": "error",
+                "message": f"Error generating response: {str(e)}",
+                "token": "",
+                "done": True
+            })
+
     def generate_conversation_response(self, 
                                      messages: List[Dict[str, str]], 
                                      max_tokens: int = 150, 

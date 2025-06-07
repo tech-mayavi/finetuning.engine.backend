@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, File, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 from typing import Optional, Dict, Any, Union, List
 import asyncio
@@ -1055,6 +1055,42 @@ async def chat_quick(message: str, model_path: Optional[str] = None):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error in quick chat: {str(e)}")
+
+@app.post("/chat/stream")
+async def chat_stream(request: SingleChatRequest):
+    """Stream chat response token by token"""
+    try:
+        # Load model if specified and not already loaded
+        if request.model_path and model_manager.current_model_path != request.model_path:
+            load_result = model_manager.load_model(request.model_path)
+            if load_result["status"] == "error":
+                raise HTTPException(status_code=400, detail=load_result["message"])
+        
+        # Generate streaming response
+        def generate_stream():
+            for chunk in model_manager.generate_response_stream(
+                message=request.message,
+                max_tokens=request.max_tokens,
+                temperature=request.temperature,
+                do_sample=request.do_sample
+            ):
+                yield f"data: {chunk}\n\n"
+        
+        return StreamingResponse(
+            generate_stream(),
+            media_type="text/plain",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Headers": "*",
+            }
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error in streaming chat: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
