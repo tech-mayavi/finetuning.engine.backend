@@ -298,7 +298,7 @@ async def start_simple_finetuning(background_tasks: BackgroundTasks):
         "job_id": job_id,
         "status": "queued",
         "message": "Simple finetuning job started with default parameters",
-        "dashboard_url": "http://localhost:8000/dashboard"
+        "dashboard_url": "https://finetune_engine.deepcite.in/dashboard"
     }
 
 @app.post("/finetune")
@@ -432,7 +432,7 @@ async def handle_multipart_request(request: Request, background_tasks: Backgroun
             "job_id": job_id,
             "status": "queued",
             "message": f"Finetuning job queued with {validation_result['total_rows']} training samples from {validation_result['file_type']} file (multipart upload)",
-            "dashboard_url": "http://localhost:8000/dashboard",
+            "dashboard_url": "https://finetune_engine.deepcite.in/dashboard",
             "dataset_info": validation_result,
             "config": config
         }
@@ -530,7 +530,7 @@ async def handle_base64_request(request: Request, background_tasks: BackgroundTa
             "job_id": job_id,
             "status": "queued",
             "message": f"Finetuning job queued with {validation_result['total_rows']} training samples from {validation_result['file_type']} content (base64 upload)",
-            "dashboard_url": "http://localhost:8000/dashboard",
+            "dashboard_url": "https://finetune_engine.deepcite.in/dashboard",
             "dataset_info": validation_result,
             "config": config
         }
@@ -574,7 +574,7 @@ async def start_finetuning_legacy(request: FinetuneRequest, background_tasks: Ba
             job_id=job_id,
             status="queued",
             message="Finetuning job has been queued and will start shortly",
-            dashboard_url="http://localhost:8000/dashboard"
+            dashboard_url="https://finetune_engine.deepcite.in/dashboard"
         )
         
     except HTTPException:
@@ -863,7 +863,7 @@ async def get_dashboard():
 async def get_dashboard_info():
     """Get dashboard information"""
     return {
-        "dashboard_url": "http://localhost:8000/dashboard",
+        "dashboard_url": "https://finetune_engine.deepcite.in/dashboard",
         "status": "available",
         "description": "Real-time training monitoring dashboard"
     }

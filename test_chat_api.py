@@ -8,7 +8,7 @@ import time
 import json
 import sys
 
-API_BASE_URL = "http://localhost:8000"
+API_BASE_URL = "https://finetune_engine.deepcite.in"
 
 def test_chat_api():
     """Test the chat API endpoints"""
