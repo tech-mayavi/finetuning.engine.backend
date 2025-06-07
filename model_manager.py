@@ -117,6 +117,10 @@ class ModelManager:
             # Enable inference mode
             FastLanguageModel.for_inference(model)
             
+            # Ensure model is on GPU if available
+            if torch.cuda.is_available():
+                model = model.cuda()
+            
             self.current_model = model
             self.current_tokenizer = tokenizer
             self.current_model_path = model_path
@@ -183,6 +187,17 @@ class ModelManager:
                 "metadata": self.model_metadata
             }
     
+    def _get_model_device(self) -> torch.device:
+        """Get the device where the model is located"""
+        if self.current_model is None:
+            return torch.device("cpu")
+        
+        # Get the device of the first parameter
+        try:
+            return next(self.current_model.parameters()).device
+        except StopIteration:
+            return torch.device("cpu")
+    
     def generate_response(self, 
                          message: str, 
                          max_tokens: int = 150, 
@@ -208,6 +223,10 @@ class ModelManager:
                 truncation=True,
                 max_length=2048
             )
+            
+            # Get model device and move inputs to the same device
+            model_device = self._get_model_device()
+            inputs = {key: value.to(model_device) for key, value in inputs.items()}
             
             # Generate response
             with torch.no_grad():
