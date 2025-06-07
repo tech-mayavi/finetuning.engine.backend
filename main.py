@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
-from typing import Optional, Dict, Any, Union
+from typing import Optional, Dict, Any, Union, List
 import asyncio
 import threading
 import json
@@ -17,6 +17,9 @@ import base64
 
 # Import the training functionality
 from train_with_logging import train_with_config
+
+# Import the model manager for chat functionality
+from model_manager import model_manager
 
 app = FastAPI(
     title="Model Finetuning API",
@@ -91,6 +94,40 @@ class JobStatusResponse(BaseModel):
     progress: Optional[Dict[str, Any]] = None
     logs: Optional[list] = None
     error: Optional[str] = None
+
+# Chat API Models
+class ChatMessage(BaseModel):
+    role: str  # "user" or "assistant"
+    content: str
+
+class SingleChatRequest(BaseModel):
+    message: str
+    model_path: Optional[str] = None
+    max_tokens: Optional[int] = 150
+    temperature: Optional[float] = 0.7
+    do_sample: Optional[bool] = True
+
+class ConversationChatRequest(BaseModel):
+    messages: List[ChatMessage]
+    model_path: Optional[str] = None
+    max_tokens: Optional[int] = 150
+    temperature: Optional[float] = 0.7
+
+class ChatResponse(BaseModel):
+    status: str
+    message: str
+    response: str
+    model_path: Optional[str] = None
+
+class ModelLoadRequest(BaseModel):
+    model_path: str
+    max_seq_length: Optional[int] = 2048
+
+class ModelResponse(BaseModel):
+    status: str
+    message: str
+    model_path: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
 
 def validate_data_file(data: pd.DataFrame, file_type: str) -> Dict[str, Any]:
     """Validate data format for training (supports CSV and JSON)"""
@@ -207,14 +244,31 @@ def run_training_job(job_id: str, config: FinetuneRequest):
 async def root():
     """Root endpoint with API information"""
     return {
-        "message": "Model Finetuning API",
+        "message": "Model Finetuning & Chat API",
         "version": "1.0.0",
+        "interfaces": {
+            "/chat": "Web interface for chatting with fine-tuned models",
+            "/dashboard": "Web interface for monitoring training progress",
+            "/docs": "Interactive API documentation"
+        },
         "endpoints": {
-            "/finetune": "POST - Start a new finetuning job",
-            "/jobs/{job_id}": "GET - Get job status",
-            "/jobs": "GET - List all jobs",
-            "/logs/{job_id}": "GET - Get job logs",
-            "/dashboard": "GET - Get dashboard URL"
+            "training": {
+                "/finetune": "POST - Start a new finetuning job",
+                "/jobs/{job_id}": "GET - Get job status",
+                "/jobs": "GET - List all jobs",
+                "/logs/{job_id}": "GET - Get job logs",
+                "/dashboard": "GET - Get training dashboard"
+            },
+            "chat": {
+                "/models/available": "GET - List available trained models",
+                "/models/status": "GET - Get current loaded model status",
+                "/models/load": "POST - Load a model for chat",
+                "/models/unload": "POST - Unload current model",
+                "/chat/single": "POST - Send single message to model",
+                "/chat/conversation": "POST - Send conversation to model",
+                "/chat/quick": "POST - Quick chat with query parameters",
+                "/chat": "GET - Web chat interface"
+            }
         }
     }
 
@@ -624,6 +678,15 @@ async def get_training_status():
     
     return status
 
+@app.get("/chat", response_class=HTMLResponse)
+async def get_chat_interface():
+    """Serve the chat interface"""
+    try:
+        with open('chat_interface.html', 'r', encoding='utf-8') as f:
+            return f.read()
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Chat interface not found")
+
 @app.get("/dashboard", response_class=HTMLResponse)
 async def get_dashboard():
     """Serve the training dashboard"""
@@ -827,6 +890,171 @@ async def cancel_job(job_id: str):
         "status": "cancelled",
         "message": "Job has been cancelled"
     }
+
+# ============================================================================
+# CHAT API ENDPOINTS
+# ============================================================================
+
+@app.get("/models/available")
+async def get_available_models():
+    """Get list of available trained models"""
+    try:
+        models = model_manager.get_available_models()
+        return {
+            "status": "success",
+            "models": models,
+            "total": len(models)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error getting available models: {str(e)}")
+
+@app.get("/models/status")
+async def get_model_status():
+    """Get current loaded model status"""
+    try:
+        status = model_manager.get_model_status()
+        return status
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error getting model status: {str(e)}")
+
+@app.post("/models/load", response_model=ModelResponse)
+async def load_model(request: ModelLoadRequest):
+    """Load a specific model for chat"""
+    try:
+        result = model_manager.load_model(
+            model_path=request.model_path,
+            max_seq_length=request.max_seq_length
+        )
+        
+        if result["status"] == "error":
+            raise HTTPException(status_code=400, detail=result["message"])
+        
+        return ModelResponse(**result)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error loading model: {str(e)}")
+
+@app.post("/models/unload", response_model=ModelResponse)
+async def unload_model():
+    """Unload the current model to free memory"""
+    try:
+        result = model_manager.unload_model()
+        return ModelResponse(**result)
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error unloading model: {str(e)}")
+
+@app.post("/chat/single", response_model=ChatResponse)
+async def chat_single(request: SingleChatRequest):
+    """Send a single message to the model and get a response"""
+    try:
+        # Load model if specified and not already loaded
+        if request.model_path and model_manager.current_model_path != request.model_path:
+            load_result = model_manager.load_model(request.model_path)
+            if load_result["status"] == "error":
+                raise HTTPException(status_code=400, detail=load_result["message"])
+        
+        # Generate response
+        result = model_manager.generate_response(
+            message=request.message,
+            max_tokens=request.max_tokens,
+            temperature=request.temperature,
+            do_sample=request.do_sample
+        )
+        
+        if result["status"] == "error":
+            raise HTTPException(status_code=400, detail=result["message"])
+        
+        return ChatResponse(
+            status=result["status"],
+            message=result["message"],
+            response=result["response"],
+            model_path=model_manager.current_model_path
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generating response: {str(e)}")
+
+@app.post("/chat/conversation", response_model=ChatResponse)
+async def chat_conversation(request: ConversationChatRequest):
+    """Send a conversation with multiple turns and get a response"""
+    try:
+        # Validate messages format
+        if not request.messages:
+            raise HTTPException(status_code=400, detail="Messages list cannot be empty")
+        
+        for msg in request.messages:
+            if msg.role not in ["user", "assistant"]:
+                raise HTTPException(status_code=400, detail="Message role must be 'user' or 'assistant'")
+        
+        # Load model if specified and not already loaded
+        if request.model_path and model_manager.current_model_path != request.model_path:
+            load_result = model_manager.load_model(request.model_path)
+            if load_result["status"] == "error":
+                raise HTTPException(status_code=400, detail=load_result["message"])
+        
+        # Convert messages to dict format
+        messages_dict = [{"role": msg.role, "content": msg.content} for msg in request.messages]
+        
+        # Generate response
+        result = model_manager.generate_conversation_response(
+            messages=messages_dict,
+            max_tokens=request.max_tokens,
+            temperature=request.temperature
+        )
+        
+        if result["status"] == "error":
+            raise HTTPException(status_code=400, detail=result["message"])
+        
+        return ChatResponse(
+            status=result["status"],
+            message=result["message"],
+            response=result["response"],
+            model_path=model_manager.current_model_path
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generating conversation response: {str(e)}")
+
+@app.post("/chat/quick")
+async def chat_quick(message: str, model_path: Optional[str] = None):
+    """Quick chat endpoint - send message as query parameter"""
+    try:
+        if not message.strip():
+            raise HTTPException(status_code=400, detail="Message cannot be empty")
+        
+        # Load model if specified and not already loaded
+        if model_path and model_manager.current_model_path != model_path:
+            load_result = model_manager.load_model(model_path)
+            if load_result["status"] == "error":
+                raise HTTPException(status_code=400, detail=load_result["message"])
+        
+        # Generate response with default parameters
+        result = model_manager.generate_response(
+            message=message,
+            max_tokens=150,
+            temperature=0.7
+        )
+        
+        if result["status"] == "error":
+            raise HTTPException(status_code=400, detail=result["message"])
+        
+        return {
+            "message": message,
+            "response": result["response"],
+            "model_path": model_manager.current_model_path
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error in quick chat: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
