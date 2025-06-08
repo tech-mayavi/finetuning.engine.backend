@@ -4,7 +4,7 @@ import torch
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 from unsloth import FastLanguageModel
-from transformers import TextStreamer, TextIteratorStreamer, AutoModelForCausalLM, AutoTokenizer
+from transformers import TextStreamer, TextIteratorStreamer
 import gc
 from threading import Thread
 
@@ -98,72 +98,30 @@ class ModelManager:
         """Check if the model path is a Hugging Face model ID"""
         # HF model IDs contain '/' and don't start with './' or '/'
         return '/' in model_path and not model_path.startswith('./') and not model_path.startswith('/')
-    
-    def _load_huggingface_model(self, model_id: str, max_seq_length: int = 2048) -> Dict[str, Any]:
-        """Load a Hugging Face model"""
+
+    def load_model(self, model_path: str, max_seq_length: int = 2048) -> Dict[str, Any]:
+        """Load a model using unsloth (works for both local fine-tuned and Hugging Face models)"""
         try:
-            print(f"Loading Hugging Face model: {model_id}")
+            # Unload current model first
+            if self.current_model is not None:
+                self.unload_model()
             
-            # Load tokenizer
-            tokenizer = AutoTokenizer.from_pretrained(
-                model_id,
-                trust_remote_code=True,
-                use_fast=True
-            )
+            # Determine if it's a Hugging Face model ID or local path
+            is_hf_model = self._is_huggingface_model_id(model_path)
             
-            # Set pad token if not present
-            if tokenizer.pad_token is None:
-                tokenizer.pad_token = tokenizer.eos_token
+            # For local models, validate the path exists
+            if not is_hf_model:
+                if not os.path.exists(model_path):
+                    raise ValueError(f"Model path does not exist: {model_path}")
+                
+                if not self._is_valid_model_dir(model_path):
+                    raise ValueError(f"Invalid model directory: {model_path}")
             
-            # Load model with appropriate settings
-            model = AutoModelForCausalLM.from_pretrained(
-                model_id,
-                torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
-                device_map="auto" if torch.cuda.is_available() else None,
-                trust_remote_code=True,
-                low_cpu_mem_usage=True
-            )
+            print(f"Loading {'Hugging Face' if is_hf_model else 'local'} model: {model_path}")
             
-            # Set model to evaluation mode
-            model.eval()
-            
-            self.current_model = model
-            self.current_tokenizer = tokenizer
-            self.current_model_path = model_id
-            self.is_huggingface_model = True
-            self.model_metadata = {
-                "model_type": "huggingface",
-                "model_id": model_id,
-                "loaded_at": datetime.now().isoformat()
-            }
-            
-            return {
-                "status": "success",
-                "message": f"Hugging Face model loaded successfully: {model_id}",
-                "model_path": model_id,
-                "metadata": self.model_metadata
-            }
-            
-        except Exception as e:
-            return {
-                "status": "error",
-                "message": f"Failed to load Hugging Face model {model_id}: {str(e)}",
-                "model_path": model_id
-            }
-    
-    def _load_local_model(self, model_path: str, max_seq_length: int = 2048) -> Dict[str, Any]:
-        """Load a local fine-tuned model"""
-        try:
-            # Validate model path
-            if not os.path.exists(model_path):
-                raise ValueError(f"Model path does not exist: {model_path}")
-            
-            if not self._is_valid_model_dir(model_path):
-                raise ValueError(f"Invalid model directory: {model_path}")
-            
-            # Load the model and tokenizer using unsloth
+            # Use unsloth for both local and Hugging Face models
             model, tokenizer = FastLanguageModel.from_pretrained(
-                model_name=model_path,
+                model_name=model_path,  # Works for both "./results/model" and "microsoft/Phi-3-mini"
                 max_seq_length=max_seq_length,
                 dtype=None,
                 load_in_4bit=True,
@@ -179,12 +137,22 @@ class ModelManager:
             self.current_model = model
             self.current_tokenizer = tokenizer
             self.current_model_path = model_path
-            self.is_huggingface_model = False
-            self.model_metadata = self._get_model_metadata(model_path)
+            self.is_huggingface_model = is_hf_model
             
+            # Set metadata based on model type
+            if is_hf_model:
+                self.model_metadata = {
+                    "model_type": "huggingface",
+                    "model_id": model_path,
+                    "loaded_at": datetime.now().isoformat()
+                }
+            else:
+                self.model_metadata = self._get_model_metadata(model_path)
+            
+            model_type = "Hugging Face" if is_hf_model else "local"
             return {
                 "status": "success",
-                "message": f"Local model loaded successfully from {model_path}",
+                "message": f"{model_type} model loaded successfully: {model_path}",
                 "model_path": model_path,
                 "metadata": self.model_metadata
             }
@@ -192,27 +160,7 @@ class ModelManager:
         except Exception as e:
             return {
                 "status": "error",
-                "message": f"Failed to load local model: {str(e)}",
-                "model_path": model_path
-            }
-
-    def load_model(self, model_path: str, max_seq_length: int = 2048) -> Dict[str, Any]:
-        """Load a model (either local fine-tuned or Hugging Face)"""
-        try:
-            # Unload current model first
-            if self.current_model is not None:
-                self.unload_model()
-            
-            # Determine if it's a Hugging Face model ID or local path
-            if self._is_huggingface_model_id(model_path):
-                return self._load_huggingface_model(model_path, max_seq_length)
-            else:
-                return self._load_local_model(model_path, max_seq_length)
-            
-        except Exception as e:
-            return {
-                "status": "error",
-                "message": f"Failed to load model: {str(e)}",
+                "message": f"Failed to load model {model_path}: {str(e)}",
                 "model_path": model_path
             }
     
