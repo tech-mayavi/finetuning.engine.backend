@@ -493,7 +493,6 @@ async def handle_base64_request(request: Request, background_tasks: BackgroundTa
         
         # Generate unique job ID
         job_id = str(uuid.uuid4())
-        
         # Prepare configuration
         config = {
             "model_name": base64_request.model_name,
@@ -907,6 +906,194 @@ async def get_available_models():
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error getting available models: {str(e)}")
+
+@app.get("/models/huggingface")
+async def get_huggingface_models():
+    """Get list of popular Hugging Face models (≤7B parameters, 1 per company)"""
+    try:
+        import requests
+        import re
+        
+        # Fetch models from Hugging Face API
+        response = requests.get(
+            "https://huggingface.co/api/models",
+            params={
+                "filter": "text-generation",
+                "sort": "downloads",
+                "direction": -1,
+                "limit": 200  # Get more models to filter from
+            },
+            timeout=30.0
+        )
+        response.raise_for_status()
+        hf_models_data = response.json()
+        
+        def extract_model_size(model_name, tags=None):
+            """Extract model size from name or tags"""
+            name_lower = model_name.lower()
+            
+            # Common size patterns in model names
+            size_patterns = [
+                r'(\d+\.?\d*)b(?!yte)',  # 7b, 3.5b, etc.
+                r'(\d+\.?\d*)-?b(?!yte)',  # 7-b, 3.5-b, etc.
+            ]
+            
+            for pattern in size_patterns:
+                match = re.search(pattern, name_lower)
+                if match:
+                    size = float(match.group(1))
+                    return size
+            
+            # Check tags if available
+            if tags:
+                for tag in tags:
+                    if isinstance(tag, str):
+                        tag_lower = tag.lower()
+                        for pattern in size_patterns:
+                            match = re.search(pattern, tag_lower)
+                            if match:
+                                size = float(match.group(1))
+                                return size
+            
+            return None
+        
+        def get_organization(model_id):
+            """Extract organization from model ID"""
+            if '/' in model_id:
+                return model_id.split('/')[0]
+            return 'unknown'
+        
+        def is_instruction_model(model_id, tags=None):
+            """Check if model is instruction-tuned or chat model"""
+            name_lower = model_id.lower()
+            instruction_keywords = ['instruct', 'chat', 'it', 'sft', 'dpo']
+            
+            # Check model name
+            for keyword in instruction_keywords:
+                if keyword in name_lower:
+                    return True
+            
+            # Check tags
+            if tags:
+                for tag in tags:
+                    if isinstance(tag, str) and any(keyword in tag.lower() for keyword in instruction_keywords):
+                        return True
+            
+            return False
+        
+        # Filter and process models
+        filtered_models = []
+        org_models = {}  # Track one model per organization
+        
+        for model in hf_models_data:
+            model_id = model.get('id', '')
+            tags = model.get('tags', [])
+            downloads = model.get('downloads', 0)
+            
+            # Skip if no model ID
+            if not model_id:
+                continue
+            
+            # Extract model size
+            model_size = extract_model_size(model_id, tags)
+            
+            # Skip if size not found or > 7B
+            if model_size is None or model_size > 7.0:
+                continue
+            
+            # Only include instruction/chat models
+            if not is_instruction_model(model_id, tags):
+                continue
+            
+            # Get organization
+            org = get_organization(model_id)
+            
+            # Skip certain organizations or model types we want to avoid
+            skip_orgs = ['huggingface', 'transformers', 'sentence-transformers']
+            if org in skip_orgs:
+                continue
+            
+            # Keep only one model per organization (the most downloaded one)
+            if org not in org_models or downloads > org_models[org]['downloads']:
+                org_models[org] = {
+                    'model_id': model_id,
+                    'downloads': downloads,
+                    'size': model_size,
+                    'tags': tags
+                }
+        
+        # Convert to our format
+        curated_models = []
+        for org, model_data in org_models.items():
+            model_id = model_data['model_id']
+            size = model_data['size']
+            
+            # Create clean model entry
+            model_entry = {
+                "id": model_id.replace('/', '-').lower(),
+                "name": model_id,
+                "description": f"{org.title()} {size}B parameter instruction-tuned model",
+                "size": f"{size}B",
+                "architecture": org.title(),
+                "family": org.title(),
+                "isBase": True,
+                "hf_model_id": model_id
+            }
+            curated_models.append(model_entry)
+        
+        # Sort by organization name for consistent ordering
+        curated_models.sort(key=lambda x: x['family'])
+        
+        # Limit to reasonable number (top organizations)
+        curated_models = curated_models[:15]
+        
+        return {
+            "status": "success",
+            "models": curated_models,
+            "total": len(curated_models)
+        }
+        
+    except Exception as e:
+        # Fallback to a minimal curated list if API fails
+        fallback_models = [
+            {
+                "id": "meta-llama-3.2-3b-instruct",
+                "name": "meta-llama/Llama-3.2-3B-Instruct",
+                "description": "Meta 3B parameter instruction-tuned model",
+                "size": "3B",
+                "architecture": "Llama",
+                "family": "Meta",
+                "isBase": True,
+                "hf_model_id": "meta-llama/Llama-3.2-3B-Instruct"
+            },
+            {
+                "id": "microsoft-phi-3-mini-4k-instruct",
+                "name": "microsoft/Phi-3-mini-4k-instruct",
+                "description": "Microsoft 3.8B parameter instruction model",
+                "size": "3.8B",
+                "architecture": "Phi",
+                "family": "Microsoft",
+                "isBase": True,
+                "hf_model_id": "microsoft/Phi-3-mini-4k-instruct"
+            },
+            {
+                "id": "mistralai-mistral-7b-instruct-v0.3",
+                "name": "mistralai/Mistral-7B-Instruct-v0.3",
+                "description": "Mistral 7B parameter instruction-tuned model",
+                "size": "7B",
+                "architecture": "Mistral",
+                "family": "Mistral",
+                "isBase": True,
+                "hf_model_id": "mistralai/Mistral-7B-Instruct-v0.3"
+            }
+        ]
+        
+        return {
+            "status": "success",
+            "models": fallback_models,
+            "total": len(fallback_models),
+            "note": "Using fallback models due to API error"
+        }
 
 @app.get("/models/status")
 async def get_model_status():
