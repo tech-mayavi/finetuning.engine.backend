@@ -125,15 +125,13 @@ class ModelManager:
                 max_seq_length=max_seq_length,
                 dtype=None,
                 load_in_4bit=True,
-                load_in_8bit=False
             )
             
             # Enable inference mode
             FastLanguageModel.for_inference(model)
             
-            # Ensure model is on GPU if available
-            if torch.cuda.is_available():
-                model = model.cuda()
+            # Note: Unsloth automatically handles device placement for quantized models
+            # Manual .cuda() calls are not needed and will cause errors with quantized models
             
             self.current_model = model
             self.current_tokenizer = tokenizer
