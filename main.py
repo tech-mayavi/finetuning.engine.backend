@@ -909,7 +909,254 @@ async def get_available_models():
 
 @app.get("/models/huggingface")
 async def get_huggingface_models():
-    """Get list of popular Hugging Face models (≤7B parameters, 1 per company)"""
+    """Get curated list of popular verified Hugging Face models"""
+    try:
+        # Return curated list of verified popular models
+        curated_models = [
+            {
+                "id": "microsoft-phi-3-mini-4k-instruct",
+                "name": "microsoft/Phi-3-mini-4k-instruct",
+                "description": "Microsoft Phi-3 Mini 4K context instruction model",
+                "size": "3.8B",
+                "architecture": "Phi-3",
+                "family": "Microsoft",
+                "isBase": True,
+                "hf_model_id": "microsoft/Phi-3-mini-4k-instruct"
+            },
+            {
+                "id": "meta-llama-3.2-3b-instruct",
+                "name": "meta-llama/Llama-3.2-3B-Instruct",
+                "description": "Meta Llama 3.2 3B instruction-tuned model",
+                "size": "3B",
+                "architecture": "Llama-3.2",
+                "family": "Meta",
+                "isBase": True,
+                "hf_model_id": "meta-llama/Llama-3.2-3B-Instruct"
+            },
+            {
+                "id": "mistralai-mistral-7b-instruct-v0.3",
+                "name": "mistralai/Mistral-7B-Instruct-v0.3",
+                "description": "Mistral 7B instruction-tuned model v0.3",
+                "size": "7B",
+                "architecture": "Mistral",
+                "family": "Mistral",
+                "isBase": True,
+                "hf_model_id": "mistralai/Mistral-7B-Instruct-v0.3"
+            },
+            {
+                "id": "google-gemma-2-2b-it",
+                "name": "google/gemma-2-2b-it",
+                "description": "Google Gemma 2 2B instruction-tuned model",
+                "size": "2B",
+                "architecture": "Gemma-2",
+                "family": "Google",
+                "isBase": True,
+                "hf_model_id": "google/gemma-2-2b-it"
+            },
+            {
+                "id": "qwen-qwen2.5-7b-instruct",
+                "name": "Qwen/Qwen2.5-7B-Instruct",
+                "description": "Qwen2.5 7B parameter instruction-tuned model",
+                "size": "7B",
+                "architecture": "Qwen2.5",
+                "family": "Qwen",
+                "isBase": True,
+                "hf_model_id": "Qwen/Qwen2.5-7B-Instruct"
+            }
+        ]
+        
+        return {
+            "status": "success",
+            "models": curated_models,
+            "total": len(curated_models)
+        }
+        
+    except Exception as e:
+        # Fallback to minimal list if any error
+        fallback_models = [
+            {
+                "id": "microsoft-phi-3-mini-4k-instruct",
+                "name": "microsoft/Phi-3-mini-4k-instruct",
+                "description": "Microsoft 3.8B parameter instruction model",
+                "size": "3.8B",
+                "architecture": "Phi",
+                "family": "Microsoft",
+                "isBase": True,
+                "hf_model_id": "microsoft/Phi-3-mini-4k-instruct"
+            }
+        ]
+        
+        return {
+            "status": "success",
+            "models": fallback_models,
+            "total": len(fallback_models),
+            "note": "Using fallback models"
+        }
+
+@app.get("/models/huggingface/search")
+async def search_huggingface_models(query: str, limit: int = 20):
+    """Search Hugging Face models with verification filters"""
+    try:
+        import requests
+        import re
+        
+        # Verified organizations whitelist
+        VERIFIED_ORGS = {
+            'microsoft', 'meta-llama', 'mistralai', 'google', 'Qwen', 
+            'stabilityai', 'EleutherAI', 'huggingface', 'codellama',
+            'bigscience', 'facebook', 'openai-community'
+        }
+        
+        def extract_model_size(model_name, tags=None):
+            """Extract model size from name or tags"""
+            name_lower = model_name.lower()
+            
+            # Common size patterns in model names
+            size_patterns = [
+                r'(\d+\.?\d*)b(?!yte)',  # 7b, 3.5b, etc.
+                r'(\d+\.?\d*)-?b(?!yte)',  # 7-b, 3.5-b, etc.
+            ]
+            
+            for pattern in size_patterns:
+                match = re.search(pattern, name_lower)
+                if match:
+                    size = float(match.group(1))
+                    return size
+            
+            # Check tags if available
+            if tags:
+                for tag in tags:
+                    if isinstance(tag, str):
+                        tag_lower = tag.lower()
+                        for pattern in size_patterns:
+                            match = re.search(pattern, tag_lower)
+                            if match:
+                                size = float(match.group(1))
+                                return size
+            
+            return None
+        
+        def get_organization(model_id):
+            """Extract organization from model ID"""
+            if '/' in model_id:
+                return model_id.split('/')[0]
+            return 'unknown'
+        
+        def is_instruction_model(model_id, tags=None):
+            """Check if model is instruction-tuned or chat model"""
+            name_lower = model_id.lower()
+            instruction_keywords = ['instruct', 'chat', 'it', 'sft', 'dpo']
+            
+            # Check model name
+            for keyword in instruction_keywords:
+                if keyword in name_lower:
+                    return True
+            
+            # Check tags
+            if tags:
+                for tag in tags:
+                    if isinstance(tag, str) and any(keyword in tag.lower() for keyword in instruction_keywords):
+                        return True
+            
+            return False
+        
+        def is_verified_genuine_model(model_data):
+            """Check if model is verified and genuine"""
+            model_id = model_data.get('id', '')
+            downloads = model_data.get('downloads', 0)
+            tags = model_data.get('tags', [])
+            
+            # Get organization
+            org = get_organization(model_id)
+            
+            # Must be from verified organization
+            if org not in VERIFIED_ORGS:
+                return False
+            
+            # Must have reasonable download count (indicates legitimacy)
+            if downloads < 1000:
+                return False
+            
+            # Must be instruction/chat model
+            if not is_instruction_model(model_id, tags):
+                return False
+            
+            # Extract and check model size
+            model_size = extract_model_size(model_id, tags)
+            if model_size is None or model_size > 7.0:
+                return False
+            
+            # Exclude derivative/fine-tuned models
+            exclude_patterns = [
+                'uncensored', 'roleplay', 'merged', 'gguf', 'quantized',
+                'finetune', 'custom', 'experimental', 'alpha', 'beta'
+            ]
+            
+            model_name_lower = model_id.lower()
+            if any(pattern in model_name_lower for pattern in exclude_patterns):
+                return False
+            
+            return True
+        
+        # Search Hugging Face API
+        response = requests.get(
+            "https://huggingface.co/api/models",
+            params={
+                "search": query,
+                "filter": "text-generation",
+                "sort": "downloads",
+                "direction": -1,
+                "limit": limit * 5  # Get more to filter from
+            },
+            timeout=30.0
+        )
+        response.raise_for_status()
+        search_results = response.json()
+        
+        # Filter and process results
+        verified_models = []
+        for model in search_results:
+            if is_verified_genuine_model(model):
+                model_id = model.get('id', '')
+                org = get_organization(model_id)
+                size = extract_model_size(model_id, model.get('tags', []))
+                
+                model_entry = {
+                    "id": model_id.replace('/', '-').lower(),
+                    "name": model_id,
+                    "description": f"{org.title()} {size}B parameter verified instruction model",
+                    "size": f"{size}B",
+                    "architecture": org.title(),
+                    "family": org.title(),
+                    "isBase": True,
+                    "hf_model_id": model_id,
+                    "downloads": model.get('downloads', 0)
+                }
+                verified_models.append(model_entry)
+        
+        # Sort by downloads and limit results
+        verified_models.sort(key=lambda x: x['downloads'], reverse=True)
+        verified_models = verified_models[:limit]
+        
+        return {
+            "status": "success",
+            "query": query,
+            "models": verified_models,
+            "total": len(verified_models)
+        }
+        
+    except Exception as e:
+        return {
+            "status": "error",
+            "query": query,
+            "message": f"Search failed: {str(e)}",
+            "models": [],
+            "total": 0
+        }
+
+@app.get("/models/huggingface/all")
+async def get_all_huggingface_models():
+    """Get comprehensive list of verified Hugging Face models (legacy dynamic endpoint)"""
     try:
         import requests
         import re
