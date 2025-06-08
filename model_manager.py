@@ -125,6 +125,7 @@ class ModelManager:
                 max_seq_length=max_seq_length,
                 dtype=None,
                 load_in_4bit=True,
+                load_in_8bit=False
             )
             
             # Enable inference mode
