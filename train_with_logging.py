@@ -176,11 +176,26 @@ def train_with_config(csv_path: str = None, config: dict = None):
         f.write(json.dumps(log_entry) + '\n')
     
     # Setup model with configurable parameters
+    # Get quantization setting from config
+    quantization = config.get("quantization", "4bit")
+    
+    # Set quantization parameters based on user choice
+    if quantization == "4bit":
+        load_in_4bit = True
+        load_in_8bit = False
+    elif quantization == "8bit":
+        load_in_4bit = False
+        load_in_8bit = True
+    else:  # "none"
+        load_in_4bit = False
+        load_in_8bit = False
+    
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=config.get("model_name", "unsloth/llama-3-8b-bnb-4bit"),
         max_seq_length=config.get("max_seq_length", 2048),
         dtype=None,
-        load_in_4bit=True,
+        load_in_4bit=load_in_4bit,
+        load_in_8bit=load_in_8bit,
     )
     
     model = FastLanguageModel.get_peft_model(
