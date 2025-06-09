@@ -62,26 +62,67 @@ class EvaluationService:
             
             print(f"Model loaded successfully for job {job_id}")
             
-            # Process data in batches
+            # Process data in batches with individual progress updates
             results = []
             total_rows = len(test_data)
             
             for i in range(0, total_rows, batch_size):
                 batch = test_data[i:i + batch_size]
-                batch_results = self._process_batch(batch)
-                results.extend(batch_results)
                 
-                # Update progress
-                completed = len(results)
-                progress_percentage = (completed / total_rows) * 100
-                
-                self.jobs[job_id]["completed_rows"] = completed
-                self.jobs[job_id]["progress_percentage"] = round(progress_percentage, 2)
-                
-                print(f"Job {job_id}: Processed {completed}/{total_rows} rows ({progress_percentage:.1f}%)")
-                
-                # Small delay to prevent overwhelming the system
-                time.sleep(0.1)
+                # Process each example in the batch individually for better progress tracking
+                for j, example in enumerate(batch):
+                    try:
+                        # Format the prompt based on instruction and input
+                        prompt = self._format_prompt(example.get('instruction', ''), example.get('input', ''))
+                        
+                        # Generate prediction using the loaded model
+                        generation_result = model_manager.generate_response(
+                            message=prompt,
+                            max_tokens=150,
+                            temperature=0.7,
+                            do_sample=True
+                        )
+                        
+                        if generation_result["status"] == "success":
+                            prediction = generation_result["response"].strip()
+                        else:
+                            prediction = f"[ERROR: {generation_result['message']}]"
+                        
+                        # Create result with prediction
+                        result = {
+                            **example,  # Keep original instruction, input, output
+                            "predict": prediction
+                        }
+                        results.append(result)
+                        
+                        # Update progress after each example
+                        completed = len(results)
+                        progress_percentage = (completed / total_rows) * 100
+                        
+                        self.jobs[job_id]["completed_rows"] = completed
+                        self.jobs[job_id]["progress_percentage"] = round(progress_percentage, 2)
+                        
+                        print(f"Job {job_id}: Processed {completed}/{total_rows} rows ({progress_percentage:.1f}%)")
+                        
+                        # Small delay to prevent overwhelming the system and allow progress updates
+                        time.sleep(0.2)
+                        
+                    except Exception as e:
+                        # Handle individual prediction errors
+                        result = {
+                            **example,
+                            "predict": f"[ERROR: {str(e)}]"
+                        }
+                        results.append(result)
+                        
+                        # Update progress even for errors
+                        completed = len(results)
+                        progress_percentage = (completed / total_rows) * 100
+                        
+                        self.jobs[job_id]["completed_rows"] = completed
+                        self.jobs[job_id]["progress_percentage"] = round(progress_percentage, 2)
+                        
+                        print(f"Job {job_id}: Error processing example {completed}, continuing... ({progress_percentage:.1f}%)")
             
             # Save results
             self.jobs[job_id]["results"] = results
