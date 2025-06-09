@@ -1635,10 +1635,17 @@ async def handle_evaluation_multipart_request(request: Request):
         # Parse multipart form data
         form = await request.form()
         
+        # Debug: Log form data
+        print(f"DEBUG: Form keys: {list(form.keys())}")
+        
         # Extract file and model path
         data_file = form.get("data_file")
         model_path = form.get("model_path")
         batch_size = int(form.get("batch_size", 50))
+        
+        print(f"DEBUG: data_file type: {type(data_file)}")
+        print(f"DEBUG: model_path: {model_path}")
+        print(f"DEBUG: batch_size: {batch_size}")
         
         if not data_file:
             raise HTTPException(status_code=400, detail="data_file is required")
@@ -1648,6 +1655,7 @@ async def handle_evaluation_multipart_request(request: Request):
         
         # Check if data_file is actually an UploadFile object
         if not hasattr(data_file, 'filename') or not hasattr(data_file, 'file'):
+            print(f"DEBUG: data_file attributes: {dir(data_file)}")
             raise HTTPException(status_code=400, detail="data_file must be a valid file upload")
         
         # Validate file type
@@ -1708,7 +1716,14 @@ async def handle_evaluation_base64_request(request: Request):
     """Handle base64 JSON request for evaluation"""
     try:
         # Parse JSON body
-        body = await request.json()
+        try:
+            body = await request.json()
+        except Exception as json_error:
+            raise HTTPException(status_code=400, detail=f"Invalid JSON in request body: {str(json_error)}")
+        
+        # Debug: Log the received body
+        print(f"DEBUG: Received body keys: {list(body.keys()) if isinstance(body, dict) else 'Not a dict'}")
+        
         eval_request = EvaluationBase64Request(**body)
         
         # Validate file type
@@ -1749,7 +1764,7 @@ async def handle_evaluation_base64_request(request: Request):
         
         # Create prediction job
         job_id = evaluation_service.create_prediction_job(
-            model_path=eval_request.model_path,
+            model_path=f"./results/{eval_request.model_path}",
             test_data=test_data,
             batch_size=eval_request.batch_size
         )
