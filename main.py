@@ -1793,7 +1793,10 @@ async def get_evaluation_status(job_id: str):
     progress = {
         "completed_rows": job["completed_rows"],
         "total_rows": job["total_rows"],
-        "progress_percentage": job["progress_percentage"]
+        "progress_percentage": job["progress_percentage"],
+        "estimated_completion_time": job.get("estimated_completion_time"),
+        "avg_time_per_example": job.get("avg_time_per_example", 0),
+        "processing_speed": job.get("processing_speed", 0)
     }
     
     return EvaluationStatusResponse(

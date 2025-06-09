@@ -38,7 +38,11 @@ class EvaluationService:
             "completed_at": None,
             "error": None,
             "results": [],
-            "progress_percentage": 0
+            "progress_percentage": 0,
+            "example_timings": [],
+            "estimated_completion_time": None,
+            "avg_time_per_example": 0,
+            "processing_speed": 0
         }
         
         # Start processing in background
@@ -71,6 +75,8 @@ class EvaluationService:
                 
                 # Process each example in the batch individually for better progress tracking
                 for j, example in enumerate(batch):
+                    example_start_time = time.time()
+                    
                     try:
                         # Format the prompt based on instruction and input
                         prompt = self._format_prompt(example.get('instruction', ''), example.get('input', ''))
@@ -95,18 +101,6 @@ class EvaluationService:
                         }
                         results.append(result)
                         
-                        # Update progress after each example
-                        completed = len(results)
-                        progress_percentage = (completed / total_rows) * 100
-                        
-                        self.jobs[job_id]["completed_rows"] = completed
-                        self.jobs[job_id]["progress_percentage"] = round(progress_percentage, 2)
-                        
-                        print(f"Job {job_id}: Processed {completed}/{total_rows} rows ({progress_percentage:.1f}%)")
-                        
-                        # Small delay to prevent overwhelming the system and allow progress updates
-                        time.sleep(0.2)
-                        
                     except Exception as e:
                         # Handle individual prediction errors
                         result = {
@@ -114,15 +108,34 @@ class EvaluationService:
                             "predict": f"[ERROR: {str(e)}]"
                         }
                         results.append(result)
-                        
-                        # Update progress even for errors
-                        completed = len(results)
-                        progress_percentage = (completed / total_rows) * 100
-                        
-                        self.jobs[job_id]["completed_rows"] = completed
-                        self.jobs[job_id]["progress_percentage"] = round(progress_percentage, 2)
-                        
-                        print(f"Job {job_id}: Error processing example {completed}, continuing... ({progress_percentage:.1f}%)")
+                    
+                    # Calculate timing for this example
+                    example_end_time = time.time()
+                    example_duration = example_end_time - example_start_time
+                    
+                    # Store timing (filter out outliers > 3x average)
+                    timings = self.jobs[job_id]["example_timings"]
+                    if len(timings) == 0 or example_duration <= 3 * (sum(timings) / len(timings)):
+                        timings.append(example_duration)
+                    
+                    # Update progress and time estimates
+                    completed = len(results)
+                    progress_percentage = (completed / total_rows) * 100
+                    
+                    # Calculate time estimates using hybrid approach
+                    time_estimates = self._calculate_time_estimates(timings, completed, total_rows)
+                    
+                    self.jobs[job_id]["completed_rows"] = completed
+                    self.jobs[job_id]["progress_percentage"] = round(progress_percentage, 2)
+                    self.jobs[job_id]["example_timings"] = timings
+                    self.jobs[job_id]["estimated_completion_time"] = time_estimates["estimated_completion_time"]
+                    self.jobs[job_id]["avg_time_per_example"] = time_estimates["avg_time_per_example"]
+                    self.jobs[job_id]["processing_speed"] = time_estimates["processing_speed"]
+                    
+                    print(f"Job {job_id}: Processed {completed}/{total_rows} rows ({progress_percentage:.1f}%) - ETA: {time_estimates['eta_formatted']}")
+                    
+                    # Small delay to prevent overwhelming the system and allow progress updates
+                    time.sleep(0.2)
             
             # Save results
             self.jobs[job_id]["results"] = results
@@ -175,6 +188,64 @@ class EvaluationService:
                 results.append(result)
         
         return results
+    
+    def _calculate_time_estimates(self, timings: List[float], completed: int, total: int) -> Dict[str, Any]:
+        """Calculate time estimates using hybrid approach"""
+        if not timings or completed == 0:
+            return {
+                "estimated_completion_time": None,
+                "avg_time_per_example": 0,
+                "processing_speed": 0,
+                "eta_formatted": "Calculating..."
+            }
+        
+        # Hybrid approach: simple average for first 3, weighted moving average after
+        if len(timings) < 3:
+            # Phase 1: Simple average for quick initial estimates
+            avg_time = sum(timings) / len(timings)
+        else:
+            # Phase 2: Weighted moving average (last 5 examples, more weight to recent)
+            recent_timings = timings[-5:]
+            weights = [1, 1.2, 1.4, 1.6, 2.0]  # More weight to recent examples
+            weighted_sum = sum(t * w for t, w in zip(recent_timings, weights[:len(recent_timings)]))
+            weight_sum = sum(weights[:len(recent_timings)])
+            avg_time = weighted_sum / weight_sum
+        
+        # Calculate estimates
+        remaining_examples = total - completed
+        estimated_seconds = remaining_examples * avg_time
+        
+        # Processing speed (examples per minute)
+        processing_speed = 60 / avg_time if avg_time > 0 else 0
+        
+        # Format ETA
+        eta_formatted = self._format_time_duration(estimated_seconds)
+        
+        return {
+            "estimated_completion_time": estimated_seconds,
+            "avg_time_per_example": avg_time,
+            "processing_speed": round(processing_speed, 1),
+            "eta_formatted": eta_formatted
+        }
+    
+    def _format_time_duration(self, seconds: float) -> str:
+        """Format time duration in user-friendly format"""
+        if seconds < 0:
+            return "Calculating..."
+        
+        if seconds < 60:
+            return f"{int(seconds)} seconds"
+        elif seconds < 3600:
+            minutes = int(seconds // 60)
+            remaining_seconds = int(seconds % 60)
+            if remaining_seconds == 0:
+                return f"{minutes} minute{'s' if minutes != 1 else ''}"
+            else:
+                return f"{minutes}m {remaining_seconds}s"
+        else:
+            hours = int(seconds // 3600)
+            minutes = int((seconds % 3600) // 60)
+            return f"{hours}h {minutes}m"
     
     def _format_prompt(self, instruction: str, input_text: str) -> str:
         """Format instruction and input into a proper prompt"""
