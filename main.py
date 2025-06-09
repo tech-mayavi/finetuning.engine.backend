@@ -39,6 +39,23 @@ app.add_middleware(
 # Store training jobs status
 training_jobs: Dict[str, Dict[str, Any]] = {}
 
+# Configuration management models
+class ConfigSaveRequest(BaseModel):
+    name: str
+    description: Optional[str] = ""
+    basic_parameters: Dict[str, Any]
+    advanced_parameters: Dict[str, Any]
+
+class ConfigResponse(BaseModel):
+    status: str
+    message: str
+    config_name: Optional[str] = None
+
+class ConfigListResponse(BaseModel):
+    status: str
+    configs: List[Dict[str, Any]]
+    total: int
+
 class FinetuneRequest(BaseModel):
     dataset_name: Optional[str] = "alpaca"  # Made optional with default
     model_name: Optional[str] = "unsloth/llama-3-8b-bnb-4bit"
@@ -1525,6 +1542,181 @@ async def chat_stream(request: SingleChatRequest):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error in streaming chat: {str(e)}")
+
+# ============================================================================
+# CONFIGURATION MANAGEMENT ENDPOINTS
+# ============================================================================
+
+def ensure_configs_directory():
+    """Ensure the configs directory exists"""
+    configs_dir = "configs"
+    if not os.path.exists(configs_dir):
+        os.makedirs(configs_dir)
+    return configs_dir
+
+def sanitize_filename(filename: str) -> str:
+    """Sanitize filename to be safe for filesystem"""
+    import re
+    # Remove or replace invalid characters
+    sanitized = re.sub(r'[<>:"/\\|?*]', '_', filename)
+    # Remove leading/trailing spaces and dots
+    sanitized = sanitized.strip(' .')
+    # Limit length
+    if len(sanitized) > 100:
+        sanitized = sanitized[:100]
+    return sanitized
+
+@app.post("/api/configs/save", response_model=ConfigResponse)
+async def save_configuration(request: ConfigSaveRequest):
+    """Save a training configuration to file"""
+    try:
+        # Validate configuration name
+        if not request.name or not request.name.strip():
+            raise HTTPException(status_code=400, detail="Configuration name is required")
+        
+        # Sanitize filename
+        safe_name = sanitize_filename(request.name.strip())
+        if not safe_name:
+            raise HTTPException(status_code=400, detail="Invalid configuration name")
+        
+        # Ensure configs directory exists
+        configs_dir = ensure_configs_directory()
+        config_file_path = os.path.join(configs_dir, f"{safe_name}.json")
+        
+        # Check if config already exists
+        if os.path.exists(config_file_path):
+            raise HTTPException(status_code=409, detail=f"Configuration '{request.name}' already exists")
+        
+        # Prepare configuration data
+        config_data = {
+            "metadata": {
+                "name": request.name,
+                "description": request.description,
+                "created_at": datetime.now().isoformat(),
+                "version": "1.0"
+            },
+            "basic_parameters": request.basic_parameters,
+            "advanced_parameters": request.advanced_parameters
+        }
+        
+        # Save to file
+        with open(config_file_path, 'w', encoding='utf-8') as f:
+            json.dump(config_data, f, indent=2, ensure_ascii=False)
+        
+        return ConfigResponse(
+            status="success",
+            message=f"Configuration '{request.name}' saved successfully",
+            config_name=request.name
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error saving configuration: {str(e)}")
+
+@app.get("/api/configs/list", response_model=ConfigListResponse)
+async def list_configurations():
+    """List all saved configurations"""
+    try:
+        configs_dir = ensure_configs_directory()
+        configs = []
+        
+        # Read all JSON files in configs directory
+        for filename in os.listdir(configs_dir):
+            if filename.endswith('.json'):
+                config_path = os.path.join(configs_dir, filename)
+                try:
+                    with open(config_path, 'r', encoding='utf-8') as f:
+                        config_data = json.load(f)
+                    
+                    # Extract metadata for list view
+                    metadata = config_data.get('metadata', {})
+                    config_summary = {
+                        "name": metadata.get('name', filename[:-5]),  # Remove .json extension
+                        "description": metadata.get('description', ''),
+                        "created_at": metadata.get('created_at', ''),
+                        "version": metadata.get('version', '1.0'),
+                        "filename": filename
+                    }
+                    configs.append(config_summary)
+                    
+                except Exception as e:
+                    # Skip invalid config files
+                    print(f"Warning: Could not read config file {filename}: {e}")
+                    continue
+        
+        # Sort by creation date (newest first)
+        configs.sort(key=lambda x: x.get('created_at', ''), reverse=True)
+        
+        return ConfigListResponse(
+            status="success",
+            configs=configs,
+            total=len(configs)
+        )
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error listing configurations: {str(e)}")
+
+@app.get("/api/configs/{config_name}")
+async def load_configuration(config_name: str):
+    """Load a specific configuration"""
+    try:
+        # Sanitize the config name
+        safe_name = sanitize_filename(config_name)
+        if not safe_name:
+            raise HTTPException(status_code=400, detail="Invalid configuration name")
+        
+        configs_dir = ensure_configs_directory()
+        config_file_path = os.path.join(configs_dir, f"{safe_name}.json")
+        
+        # Check if config exists
+        if not os.path.exists(config_file_path):
+            raise HTTPException(status_code=404, detail=f"Configuration '{config_name}' not found")
+        
+        # Load configuration
+        with open(config_file_path, 'r', encoding='utf-8') as f:
+            config_data = json.load(f)
+        
+        return {
+            "status": "success",
+            "message": f"Configuration '{config_name}' loaded successfully",
+            "config": config_data
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error loading configuration: {str(e)}")
+
+@app.delete("/api/configs/{config_name}", response_model=ConfigResponse)
+async def delete_configuration(config_name: str):
+    """Delete a specific configuration"""
+    try:
+        # Sanitize the config name
+        safe_name = sanitize_filename(config_name)
+        if not safe_name:
+            raise HTTPException(status_code=400, detail="Invalid configuration name")
+        
+        configs_dir = ensure_configs_directory()
+        config_file_path = os.path.join(configs_dir, f"{safe_name}.json")
+        
+        # Check if config exists
+        if not os.path.exists(config_file_path):
+            raise HTTPException(status_code=404, detail=f"Configuration '{config_name}' not found")
+        
+        # Delete the file
+        os.remove(config_file_path)
+        
+        return ConfigResponse(
+            status="success",
+            message=f"Configuration '{config_name}' deleted successfully",
+            config_name=config_name
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error deleting configuration: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
