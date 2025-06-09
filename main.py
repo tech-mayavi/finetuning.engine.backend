@@ -21,6 +21,9 @@ from train_with_logging import train_with_config
 # Import the model manager for chat functionality
 from model_manager import model_manager
 
+# Import the evaluation service
+from evaluation_service import evaluation_service, validate_test_data, load_test_data_from_file
+
 app = FastAPI(
     title="Model Finetuning API",
     description="API for finetuning language models with real-time logging",
@@ -1542,6 +1545,295 @@ async def chat_stream(request: SingleChatRequest):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error in streaming chat: {str(e)}")
+
+# ============================================================================
+# EVALUATION API ENDPOINTS
+# ============================================================================
+
+# Evaluation API Models
+class EvaluationRequest(BaseModel):
+    model_path: str
+    test_data: List[Dict[str, Any]]
+    batch_size: Optional[int] = 50
+
+class EvaluationBase64Request(BaseModel):
+    model_path: str
+    file_content: str  # base64 encoded file content
+    file_type: str     # "csv", "json", "jsonl"
+    batch_size: Optional[int] = 50
+
+class EvaluationResponse(BaseModel):
+    job_id: str
+    status: str
+    message: str
+    total_rows: int
+
+class EvaluationStatusResponse(BaseModel):
+    job_id: str
+    status: str
+    progress: Dict[str, Any]
+    error: Optional[str] = None
+
+@app.post("/evaluate/predict", response_model=EvaluationResponse)
+async def start_prediction_job(request: EvaluationRequest):
+    """Start a prediction job with test data"""
+    try:
+        # Validate model path
+        if not request.model_path or not request.model_path.strip():
+            raise HTTPException(status_code=400, detail="Model path is required")
+        
+        # Validate test data
+        if not request.test_data:
+            raise HTTPException(status_code=400, detail="Test data cannot be empty")
+        
+        # Validate test data format
+        try:
+            validation_result = validate_test_data(request.test_data)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid test data format: {str(e)}")
+        
+        # Create prediction job
+        job_id = evaluation_service.create_prediction_job(
+            model_path=request.model_path,
+            test_data=request.test_data,
+            batch_size=request.batch_size
+        )
+        
+        return EvaluationResponse(
+            job_id=job_id,
+            status="queued",
+            message=f"Prediction job created with {len(request.test_data)} test examples",
+            total_rows=len(request.test_data)
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error creating prediction job: {str(e)}")
+
+@app.post("/evaluate/predict-file")
+async def start_prediction_job_with_file(
+    request: Request
+):
+    """Start prediction job with file upload (multipart or base64)"""
+    
+    content_type = request.headers.get("content-type", "")
+    
+    if content_type.startswith("multipart/form-data"):
+        return await handle_evaluation_multipart_request(request)
+    elif content_type.startswith("application/json"):
+        return await handle_evaluation_base64_request(request)
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="Content-Type must be either 'multipart/form-data' or 'application/json'"
+        )
+
+async def handle_evaluation_multipart_request(request: Request):
+    """Handle multipart file upload for evaluation"""
+    try:
+        # Parse multipart form data
+        form = await request.form()
+        
+        # Extract file and model path
+        data_file = form.get("data_file")
+        model_path = form.get("model_path")
+        batch_size = int(form.get("batch_size", 50))
+        
+        if not data_file:
+            raise HTTPException(status_code=400, detail="data_file is required")
+        
+        if not model_path:
+            raise HTTPException(status_code=400, detail="model_path is required")
+        
+        # Check if data_file is actually an UploadFile object
+        if not hasattr(data_file, 'filename') or not hasattr(data_file, 'file'):
+            raise HTTPException(status_code=400, detail="data_file must be a valid file upload")
+        
+        # Validate file type
+        allowed_extensions = ['.csv', '.json', '.jsonl']
+        if not data_file.filename:
+            raise HTTPException(status_code=400, detail="File must have a filename")
+        
+        file_extension = os.path.splitext(data_file.filename)[1].lower()
+        
+        if file_extension not in allowed_extensions:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"File must be one of: {', '.join(allowed_extensions)}. Got: {file_extension}"
+            )
+        
+        # Save uploaded file temporarily
+        temp_dir = tempfile.mkdtemp()
+        temp_file_path = os.path.join(temp_dir, f"test_data_{uuid.uuid4().hex}{file_extension}")
+        
+        with open(temp_file_path, "wb") as buffer:
+            shutil.copyfileobj(data_file.file, buffer)
+        
+        # Load and validate test data
+        try:
+            test_data, file_type = load_test_data_from_file(temp_file_path)
+            validation_result = validate_test_data(test_data)
+        except Exception as e:
+            # Clean up temp file
+            if os.path.exists(temp_file_path):
+                os.remove(temp_file_path)
+            raise HTTPException(status_code=400, detail=f"Invalid {file_extension} file: {str(e)}")
+        finally:
+            # Clean up temp file
+            if os.path.exists(temp_file_path):
+                os.remove(temp_file_path)
+        
+        # Create prediction job
+        job_id = evaluation_service.create_prediction_job(
+            model_path=str(model_path),
+            test_data=test_data,
+            batch_size=batch_size
+        )
+        
+        return {
+            "job_id": job_id,
+            "status": "queued",
+            "message": f"Prediction job created with {len(test_data)} test examples from {file_type.upper()} file",
+            "total_rows": len(test_data),
+            "dataset_info": validation_result
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error processing evaluation request: {str(e)}")
+
+async def handle_evaluation_base64_request(request: Request):
+    """Handle base64 JSON request for evaluation"""
+    try:
+        # Parse JSON body
+        body = await request.json()
+        eval_request = EvaluationBase64Request(**body)
+        
+        # Validate file type
+        allowed_file_types = ['csv', 'json', 'jsonl']
+        if eval_request.file_type.lower() not in allowed_file_types:
+            raise HTTPException(
+                status_code=400,
+                detail=f"file_type must be one of: {', '.join(allowed_file_types)}. Got: {eval_request.file_type}"
+            )
+        
+        # Decode base64 content
+        try:
+            file_content = base64.b64decode(eval_request.file_content)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid base64 encoding: {str(e)}")
+        
+        # Create temporary file
+        temp_dir = tempfile.mkdtemp()
+        file_extension = f".{eval_request.file_type.lower()}"
+        temp_file_path = os.path.join(temp_dir, f"test_data_{uuid.uuid4().hex}{file_extension}")
+        
+        with open(temp_file_path, "wb") as f:
+            f.write(file_content)
+        
+        # Load and validate test data
+        try:
+            test_data, file_type = load_test_data_from_file(temp_file_path)
+            validation_result = validate_test_data(test_data)
+        except Exception as e:
+            # Clean up temp file
+            if os.path.exists(temp_file_path):
+                os.remove(temp_file_path)
+            raise HTTPException(status_code=400, detail=f"Invalid {eval_request.file_type} content: {str(e)}")
+        finally:
+            # Clean up temp file
+            if os.path.exists(temp_file_path):
+                os.remove(temp_file_path)
+        
+        # Create prediction job
+        job_id = evaluation_service.create_prediction_job(
+            model_path=eval_request.model_path,
+            test_data=test_data,
+            batch_size=eval_request.batch_size
+        )
+        
+        return {
+            "job_id": job_id,
+            "status": "queued",
+            "message": f"Prediction job created with {len(test_data)} test examples from {file_type.upper()} content",
+            "total_rows": len(test_data),
+            "dataset_info": validation_result
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error processing base64 evaluation request: {str(e)}")
+
+@app.get("/evaluate/status/{job_id}", response_model=EvaluationStatusResponse)
+async def get_evaluation_status(job_id: str):
+    """Get status of an evaluation job"""
+    
+    job = evaluation_service.get_job_status(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Evaluation job not found")
+    
+    progress = {
+        "completed_rows": job["completed_rows"],
+        "total_rows": job["total_rows"],
+        "progress_percentage": job["progress_percentage"]
+    }
+    
+    return EvaluationStatusResponse(
+        job_id=job_id,
+        status=job["status"],
+        progress=progress,
+        error=job.get("error")
+    )
+
+@app.get("/evaluate/results/{job_id}")
+async def get_evaluation_results(job_id: str):
+    """Get results of a completed evaluation job"""
+    
+    results = evaluation_service.get_job_results(job_id)
+    if results is None:
+        job = evaluation_service.get_job_status(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Evaluation job not found")
+        
+        if job["status"] == "running":
+            raise HTTPException(status_code=202, detail="Evaluation job is still running")
+        elif job["status"] == "failed":
+            raise HTTPException(status_code=400, detail=f"Evaluation job failed: {job.get('error', 'Unknown error')}")
+        else:
+            raise HTTPException(status_code=404, detail="Evaluation results not available")
+    
+    return {
+        "job_id": job_id,
+        "status": "completed",
+        "total_results": len(results),
+        "results": results
+    }
+
+@app.get("/evaluate/jobs")
+async def list_evaluation_jobs():
+    """List all evaluation jobs"""
+    jobs = evaluation_service.list_jobs()
+    return {
+        "jobs": jobs,
+        "total": len(jobs)
+    }
+
+@app.delete("/evaluate/jobs/{job_id}")
+async def delete_evaluation_job(job_id: str):
+    """Delete an evaluation job and its results"""
+    
+    success = evaluation_service.delete_job(job_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Evaluation job not found")
+    
+    return {
+        "job_id": job_id,
+        "status": "deleted",
+        "message": "Evaluation job deleted successfully"
+    }
 
 # ============================================================================
 # CONFIGURATION MANAGEMENT ENDPOINTS
