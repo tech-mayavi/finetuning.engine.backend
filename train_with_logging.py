@@ -303,7 +303,7 @@ def train_with_config(csv_path: str = None, config: dict = None):
     trainer_stats = trainer.train()
     
     # Save model
-    model_output_dir = os.path.join(config.get("output_dir", "./results"), "lora_model")
+    model_output_dir = config.get("output_dir", "./results")
     model.save_pretrained(model_output_dir)
     tokenizer.save_pretrained(model_output_dir)
     
