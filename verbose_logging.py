@@ -817,16 +817,78 @@ class VerboseLoggingCallback(TrainerCallback):
         self._write_log(completion_log)
     
     def _write_log(self, log_entry):
-        """Write log entry to file with error handling"""
+        """Write log entry to both verbose and standard log files with error handling"""
         try:
+            # Write to verbose log file (full detailed log)
             with open(self.log_file, 'a', encoding='utf-8') as f:
                 f.write(json.dumps(log_entry, ensure_ascii=False) + '\n')
+            
+            # Also write a simplified version to standard log file for frontend compatibility
+            self._write_standard_log(log_entry)
+            
         except Exception as e:
             print(f"Error writing verbose log: {e}")
             # Fallback to basic logging
             try:
                 with open('verbose_logging_errors.log', 'a') as f:
                     f.write(f"{datetime.now().isoformat()}: Error writing log - {str(e)}\n")
+            except:
+                pass
+    
+    def _write_standard_log(self, verbose_log_entry):
+        """Write a simplified version of the log entry to the standard log file for frontend compatibility"""
+        try:
+            # Create a simplified log entry compatible with the original format
+            standard_log = {
+                "timestamp": verbose_log_entry["timestamp"],
+                "type": verbose_log_entry["type"],
+                "level": verbose_log_entry["level"],
+                "message": verbose_log_entry["message"],
+                "step": verbose_log_entry.get("step", 0),
+                "epoch": verbose_log_entry.get("epoch", 0)
+            }
+            
+            # Add key metrics for frontend display
+            if "timing" in verbose_log_entry:
+                timing = verbose_log_entry["timing"]
+                standard_log.update({
+                    "step_time": timing.get("step_time_seconds"),
+                    "avg_step_time": timing.get("avg_step_time_seconds"),
+                    "eta_minutes": timing.get("eta_minutes")
+                })
+            
+            if "metrics" in verbose_log_entry:
+                metrics = verbose_log_entry["metrics"]
+                standard_log.update({
+                    "loss": metrics.get("loss"),
+                    "learning_rate": metrics.get("learning_rate"),
+                    "grad_norm": metrics.get("grad_norm")
+                })
+            
+            if "progress" in verbose_log_entry:
+                progress = verbose_log_entry["progress"]
+                standard_log.update({
+                    "progress_percent": progress.get("progress_percent"),
+                    "remaining_steps": progress.get("remaining_steps")
+                })
+            
+            # Write to standard log file
+            with open('training_logs.jsonl', 'a', encoding='utf-8') as f:
+                f.write(json.dumps(standard_log, ensure_ascii=False) + '\n')
+                
+        except Exception as e:
+            # If standard logging fails, at least try to write a basic entry
+            try:
+                basic_log = {
+                    "timestamp": verbose_log_entry["timestamp"],
+                    "type": verbose_log_entry["type"],
+                    "level": verbose_log_entry["level"],
+                    "message": verbose_log_entry["message"],
+                    "step": verbose_log_entry.get("step", 0),
+                    "epoch": verbose_log_entry.get("epoch", 0)
+                }
+                with open('training_logs.jsonl', 'a', encoding='utf-8') as f:
+                    f.write(json.dumps(basic_log, ensure_ascii=False) + '\n')
             except:
                 pass
 
