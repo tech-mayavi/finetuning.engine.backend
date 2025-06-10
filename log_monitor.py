@@ -9,10 +9,11 @@ import os
 class DetailedLoggingCallback(TrainerCallback):
     """Custom callback for detailed training logging"""
     
-    def __init__(self):
+    def __init__(self, logging_steps=1):
         self.start_time = None
         self.step_times = []
         self.last_step_time = None
+        self.logging_steps = logging_steps
         
     def on_train_begin(self, args, state, control, **kwargs):
         """Called at the beginning of training"""
@@ -154,7 +155,7 @@ class DetailedLoggingCallback(TrainerCallback):
     
     def on_log(self, args, state, control, logs=None, **kwargs):
         """Called when logging occurs"""
-        if logs and state.global_step % 5 == 0:  # Log detailed metrics every 5 steps
+        if logs and state.global_step % self.logging_steps == 0:  # Log detailed metrics based on logging_steps
             self._write_log({
                 "timestamp": datetime.now().isoformat(),
                 "type": "metrics",
