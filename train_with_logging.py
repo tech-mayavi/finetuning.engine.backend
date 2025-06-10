@@ -10,8 +10,9 @@ from trl import SFTTrainer
 import torch
 import pandas as pd
 
-# Import our custom logging callback
+# Import our custom logging callbacks
 from log_monitor import DetailedLoggingCallback
+from verbose_logging import VerboseLoggingCallback
 
 def setup_model_and_tokenizer():
     """Setup Unsloth model and tokenizer"""
@@ -144,7 +145,9 @@ def train_with_config(csv_path: str = None, config: dict = None):
             "output_dir": "./results",
             "lora_r": 16,
             "lora_alpha": 16,
-            "lora_dropout": 0.0
+            "lora_dropout": 0.0,
+            "verbosity_level": "high",  # New: "low", "medium", "high", "ultra"
+            "use_verbose_logging": True  # New: Enable verbose logging by default
         }
     
     print("Starting training with real-time logging...")
@@ -297,7 +300,25 @@ def train_with_config(csv_path: str = None, config: dict = None):
     with open('training_logs.jsonl', 'a') as f:
         f.write(json.dumps(log_entry) + '\n')
     
-    # Create trainer with custom callback
+    # Choose logging callback based on configuration
+    use_verbose_logging = config.get("use_verbose_logging", True)
+    verbosity_level = config.get("verbosity_level", "high")
+    
+    if use_verbose_logging:
+        # Use the new verbose logging callback
+        logging_callback = VerboseLoggingCallback(
+            verbosity_level=verbosity_level,
+            log_file="verbose_training_logs.jsonl"
+        )
+        print(f"🔍 Using verbose logging with '{verbosity_level}' verbosity level")
+        print("📊 Verbose logs will be saved to: verbose_training_logs.jsonl")
+    else:
+        # Use the original detailed logging callback
+        logging_callback = DetailedLoggingCallback()
+        print("📝 Using standard detailed logging")
+        print("📊 Standard logs will be saved to: training_logs.jsonl")
+    
+    # Create trainer with selected callback
     trainer = SFTTrainer(
         model=model,
         tokenizer=tokenizer,
@@ -307,7 +328,7 @@ def train_with_config(csv_path: str = None, config: dict = None):
         dataset_num_proc=2,
         packing=False,
         args=training_args,
-        callbacks=[DetailedLoggingCallback()]
+        callbacks=[logging_callback]
     )
     
     # Show model info
