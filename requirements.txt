@@ -13,5 +13,3 @@ trl
 accelerate
 bitsandbytes
 xformers
-psutil
-numpy

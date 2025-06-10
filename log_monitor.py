@@ -1,17 +1,10 @@
 import json
 import threading
 import time
-import psutil
-import platform
-import sys
-import gc
 from datetime import datetime
 from flask import Flask, render_template, jsonify
 from transformers import TrainerCallback
 import os
-import torch
-import numpy as np
-from typing import Dict, Any, Optional
 
 class DetailedLoggingCallback(TrainerCallback):
     """Custom callback for detailed training logging"""
