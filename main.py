@@ -1085,8 +1085,13 @@ async def get_training_session_metrics(session_id: str):
     }
 
 @app.get("/api/training/sessions")
-async def list_all_training_sessions():
-    """List all training sessions (both active and completed)"""
+async def list_all_training_sessions(
+    status: Optional[str] = None,
+    limit: Optional[int] = None,
+    offset: Optional[int] = 0,
+    search: Optional[str] = None
+):
+    """List all training sessions with filtering and pagination"""
     
     # Get sessions from persistent storage
     persistent_sessions = list_training_sessions()
@@ -1110,14 +1115,121 @@ async def list_all_training_sessions():
         else:
             all_sessions[session_id] = session
     
-    # Convert to list and sort by creation date
+    # Convert to list
     sessions_list = list(all_sessions.values())
+    
+    # Apply filters
+    if status:
+        sessions_list = [s for s in sessions_list if s.get("status") == status]
+    
+    if search:
+        search_lower = search.lower()
+        sessions_list = [
+            s for s in sessions_list 
+            if search_lower in s.get("id", "").lower() 
+            or search_lower in s.get("config", {}).get("model_name", "").lower()
+        ]
+    
+    # Sort by creation date (newest first)
     sessions_list.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+    
+    # Apply pagination
+    total_sessions = len(sessions_list)
+    if limit:
+        sessions_list = sessions_list[offset:offset + limit]
     
     return {
         "sessions": sessions_list,
-        "total": len(sessions_list)
+        "total": total_sessions,
+        "limit": limit,
+        "offset": offset
     }
+
+@app.get("/api/training/dashboard/stats")
+async def get_training_dashboard_stats():
+    """Get training dashboard statistics"""
+    
+    # Get all sessions
+    persistent_sessions = list_training_sessions()
+    active_sessions = list(training_jobs.values())
+    
+    # Combine sessions
+    all_sessions = {}
+    for session in persistent_sessions:
+        all_sessions[session["id"]] = session
+    
+    for session in active_sessions:
+        session_id = session["id"]
+        if session_id in all_sessions:
+            all_sessions[session_id].update(session)
+        else:
+            all_sessions[session_id] = session
+    
+    sessions_list = list(all_sessions.values())
+    
+    # Calculate statistics
+    total_sessions = len(sessions_list)
+    
+    # Count by status
+    status_counts = {}
+    for session in sessions_list:
+        status = session.get("status", "unknown")
+        status_counts[status] = status_counts.get(status, 0) + 1
+    
+    active_sessions_count = status_counts.get("running", 0) + status_counts.get("queued", 0) + status_counts.get("initializing", 0)
+    completed_sessions = status_counts.get("completed", 0)
+    failed_sessions = status_counts.get("failed", 0)
+    
+    # Calculate success rate
+    finished_sessions = completed_sessions + failed_sessions
+    success_rate = (completed_sessions / finished_sessions * 100) if finished_sessions > 0 else 0
+    
+    # Calculate average training time for completed sessions
+    completed_session_times = []
+    for session in sessions_list:
+        if session.get("status") == "completed" and session.get("started_at") and session.get("completed_at"):
+            try:
+                start_time = datetime.fromisoformat(session["started_at"].replace('Z', '+00:00'))
+                end_time = datetime.fromisoformat(session["completed_at"].replace('Z', '+00:00'))
+                duration = (end_time - start_time).total_seconds()
+                completed_session_times.append(duration)
+            except:
+                continue
+    
+    avg_training_time = sum(completed_session_times) / len(completed_session_times) if completed_session_times else 0
+    
+    # Most used models
+    model_usage = {}
+    for session in sessions_list:
+        model_name = session.get("config", {}).get("model_name", "Unknown")
+        model_usage[model_name] = model_usage.get(model_name, 0) + 1
+    
+    most_used_model = max(model_usage.items(), key=lambda x: x[1]) if model_usage else ("None", 0)
+    
+    return {
+        "total_sessions": total_sessions,
+        "active_sessions": active_sessions_count,
+        "completed_sessions": completed_sessions,
+        "failed_sessions": failed_sessions,
+        "success_rate": round(success_rate, 1),
+        "avg_training_time_seconds": round(avg_training_time, 0),
+        "avg_training_time_formatted": format_duration(avg_training_time),
+        "most_used_model": most_used_model[0],
+        "status_breakdown": status_counts,
+        "model_usage": model_usage
+    }
+
+def format_duration(seconds):
+    """Format duration in seconds to human readable format"""
+    if seconds < 60:
+        return f"{int(seconds)}s"
+    elif seconds < 3600:
+        minutes = int(seconds // 60)
+        return f"{minutes}m {int(seconds % 60)}s"
+    else:
+        hours = int(seconds // 3600)
+        minutes = int((seconds % 3600) // 60)
+        return f"{hours}h {minutes}m"
 
 @app.get("/training/{session_id}", response_class=HTMLResponse)
 async def get_training_session_page(session_id: str):

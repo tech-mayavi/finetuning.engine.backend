@@ -1,0 +1,39 @@
+{
+  "id": "session-789-failed",
+  "status": "failed",
+  "config": {
+    "model_name": "mistralai/Mistral-7B-Instruct-v0.3",
+    "max_seq_length": 4096,
+    "num_train_epochs": 3,
+    "per_device_train_batch_size": 1,
+    "gradient_accumulation_steps": 8,
+    "learning_rate": 0.0003,
+    "max_steps": 200,
+    "warmup_steps": 20,
+    "save_steps": 50,
+    "logging_steps": 1,
+    "output_dir": "./results",
+    "lora_r": 16,
+    "lora_alpha": 16,
+    "lora_dropout": 0.05
+  },
+  "dataset_info": {
+    "total_rows": 5000,
+    "columns": ["instruction", "input", "output"],
+    "null_counts": {},
+    "sample_data": [
+      {
+        "instruction": "Write a Python function to calculate fibonacci numbers",
+        "input": "",
+        "output": "def fibonacci(n):\n    if n <= 1:\n        return n\n    return fibonacci(n-1) + fibonacci(n-2)"
+      }
+    ],
+    "file_type": "JSONL"
+  },
+  "created_at": "2025-01-06T14:20:00.000Z",
+  "started_at": "2025-01-06T14:21:00.000Z",
+  "failed_at": "2025-01-06T14:35:00.000Z",
+  "error": "CUDA out of memory. Tried to allocate 2.00 GiB",
+  "logs": [],
+  "upload_method": "base64"
+}

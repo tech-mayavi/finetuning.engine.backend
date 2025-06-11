@@ -1,0 +1,38 @@
+{
+  "id": "session-456-running",
+  "status": "running",
+  "config": {
+    "model_name": "microsoft/Phi-3-mini-4k-instruct",
+    "max_seq_length": 2048,
+    "num_train_epochs": 5,
+    "per_device_train_batch_size": 4,
+    "gradient_accumulation_steps": 2,
+    "learning_rate": 0.0001,
+    "max_steps": 100,
+    "warmup_steps": 10,
+    "save_steps": 25,
+    "logging_steps": 1,
+    "output_dir": "./results",
+    "lora_r": 32,
+    "lora_alpha": 32,
+    "lora_dropout": 0.1
+  },
+  "dataset_info": {
+    "total_rows": 2500,
+    "columns": ["instruction", "input", "output"],
+    "null_counts": {},
+    "sample_data": [
+      {
+        "instruction": "Explain quantum computing",
+        "input": "",
+        "output": "Quantum computing is a revolutionary computing paradigm that leverages quantum mechanical phenomena to process information in fundamentally different ways than classical computers."
+      }
+    ],
+    "file_type": "JSON"
+  },
+  "created_at": "2025-01-06T16:45:00.000Z",
+  "started_at": "2025-01-06T16:46:00.000Z",
+  "progress": 65,
+  "logs": [],
+  "upload_method": "multipart"
+}
