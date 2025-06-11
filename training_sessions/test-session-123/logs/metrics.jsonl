@@ -1,0 +1,9 @@
+{"timestamp": "2025-01-06T15:32:00.000Z", "type": "training_step", "level": "INFO", "step": 1, "epoch": 0, "loss": 2.4567, "learning_rate": 0.0002, "session_id": "test-session-123"}
+{"timestamp": "2025-01-06T15:32:10.000Z", "type": "training_step", "level": "INFO", "step": 2, "epoch": 0, "loss": 2.3456, "learning_rate": 0.0002, "session_id": "test-session-123"}
+{"timestamp": "2025-01-06T15:32:20.000Z", "type": "training_step", "level": "INFO", "step": 3, "epoch": 0, "loss": 2.2345, "learning_rate": 0.0002, "session_id": "test-session-123"}
+{"timestamp": "2025-01-06T15:32:30.000Z", "type": "training_step", "level": "INFO", "step": 4, "epoch": 0, "loss": 2.1234, "learning_rate": 0.0002, "session_id": "test-session-123"}
+{"timestamp": "2025-01-06T15:32:40.000Z", "type": "training_step", "level": "INFO", "step": 5, "epoch": 0, "loss": 2.0123, "learning_rate": 0.0002, "session_id": "test-session-123"}
+{"timestamp": "2025-01-06T16:14:30.000Z", "type": "training_step", "level": "INFO", "step": 58, "epoch": 2, "loss": 0.3456, "learning_rate": 0.0001, "session_id": "test-session-123"}
+{"timestamp": "2025-01-06T16:14:40.000Z", "type": "training_step", "level": "INFO", "step": 59, "epoch": 2, "loss": 0.3234, "learning_rate": 0.0001, "session_id": "test-session-123"}
+{"timestamp": "2025-01-06T16:14:50.000Z", "type": "training_step", "level": "INFO", "step": 60, "epoch": 2, "loss": 0.3012, "learning_rate": 0.0001, "session_id": "test-session-123"}
+{"timestamp": "2025-01-06T16:15:00.000Z", "type": "training_complete", "level": "INFO", "message": "Training completed successfully", "session_id": "test-session-123"}

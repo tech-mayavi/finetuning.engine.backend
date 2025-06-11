@@ -125,7 +125,7 @@ def prepare_dataset(tokenizer):
     dataset = dataset.map(formatting_prompts_func, batched=True)
     return dataset
 
-def train_with_config(csv_path: str = None, config: dict = None):
+def train_with_config(csv_path: str = None, config: dict = None, session_id: str = None):
     """Train model with configurable parameters and optional CSV data"""
     
     # Set default config if not provided
@@ -147,8 +147,65 @@ def train_with_config(csv_path: str = None, config: dict = None):
             "lora_dropout": 0.0
         }
     
-    print("Starting training with real-time logging...")
-    print("Dashboard available at: http://localhost:8000/dashboard")
+    # Setup session-specific logging
+    if session_id:
+        session_logs_dir = f"training_sessions/{session_id}/logs"
+        os.makedirs(session_logs_dir, exist_ok=True)
+        
+        # Session-specific log files
+        training_log_file = os.path.join(session_logs_dir, "training.log")
+        metrics_log_file = os.path.join(session_logs_dir, "metrics.jsonl")
+        console_log_file = os.path.join(session_logs_dir, "console.log")
+        errors_log_file = os.path.join(session_logs_dir, "errors.log")
+        
+        # Also create a global log file for backward compatibility
+        global_log_file = 'training_logs.jsonl'
+        
+        print(f"Starting training with session-specific logging...")
+        print(f"Session ID: {session_id}")
+        print(f"Logs directory: {session_logs_dir}")
+        print(f"Dashboard available at: http://localhost:8000/training/{session_id}")
+    else:
+        # Fallback to global logging
+        global_log_file = 'training_logs.jsonl'
+        training_log_file = None
+        metrics_log_file = None
+        console_log_file = None
+        errors_log_file = None
+        
+        print("Starting training with global logging...")
+        print("Dashboard available at: http://localhost:8000/dashboard")
+    
+    # Helper function to write logs to both session and global files
+    def write_log_entry(log_entry, log_type="general"):
+        # Write to global log file (for backward compatibility)
+        with open(global_log_file, 'a') as f:
+            f.write(json.dumps(log_entry) + '\n')
+        
+        # Write to session-specific log files if session_id is provided
+        if session_id:
+            # Write to human-readable training log
+            if training_log_file:
+                with open(training_log_file, 'a') as f:
+                    timestamp = log_entry.get('timestamp', '')
+                    level = log_entry.get('level', 'INFO')
+                    message = log_entry.get('message', '')
+                    f.write(f"[{timestamp}] {level}: {message}\n")
+            
+            # Write to structured metrics log
+            if metrics_log_file and log_type in ['metrics', 'training_step', 'epoch_end']:
+                with open(metrics_log_file, 'a') as f:
+                    f.write(json.dumps(log_entry) + '\n')
+            
+            # Write to console log for important messages
+            if console_log_file and log_entry.get('level') in ['INFO', 'WARNING', 'ERROR']:
+                with open(console_log_file, 'a') as f:
+                    f.write(json.dumps(log_entry) + '\n')
+            
+            # Write to errors log for errors only
+            if errors_log_file and log_entry.get('level') == 'ERROR':
+                with open(errors_log_file, 'a') as f:
+                    f.write(json.dumps(log_entry) + '\n')
     
     # Log configuration
     log_entry = {
@@ -158,10 +215,10 @@ def train_with_config(csv_path: str = None, config: dict = None):
         "message": "🔧 Training configuration loaded",
         "step": 0,
         "epoch": 0,
-        "config": config
+        "config": config,
+        "session_id": session_id
     }
-    with open('training_logs.jsonl', 'a') as f:
-        f.write(json.dumps(log_entry) + '\n')
+    write_log_entry(log_entry)
     
     # Log initialization steps
     log_entry = {
@@ -170,10 +227,10 @@ def train_with_config(csv_path: str = None, config: dict = None):
         "level": "INFO",
         "message": "🚀 Setting up model and tokenizer...",
         "step": 0,
-        "epoch": 0
+        "epoch": 0,
+        "session_id": session_id
     }
-    with open('training_logs.jsonl', 'a') as f:
-        f.write(json.dumps(log_entry) + '\n')
+    write_log_entry(log_entry)
     
     # Setup model with configurable parameters
     # Get quantization setting from config
@@ -219,10 +276,10 @@ def train_with_config(csv_path: str = None, config: dict = None):
         "level": "INFO",
         "message": "✅ Model and tokenizer loaded successfully",
         "step": 0,
-        "epoch": 0
+        "epoch": 0,
+        "session_id": session_id
     }
-    with open('training_logs.jsonl', 'a') as f:
-        f.write(json.dumps(log_entry) + '\n')
+    write_log_entry(log_entry)
     
     # Log dataset preparation
     log_entry = {
@@ -231,10 +288,10 @@ def train_with_config(csv_path: str = None, config: dict = None):
         "level": "INFO",
         "message": "📊 Preparing dataset...",
         "step": 0,
-        "epoch": 0
+        "epoch": 0,
+        "session_id": session_id
     }
-    with open('training_logs.jsonl', 'a') as f:
-        f.write(json.dumps(log_entry) + '\n')
+    write_log_entry(log_entry)
     
     # Prepare dataset (file or default)
     if csv_path and os.path.exists(csv_path):
@@ -253,10 +310,10 @@ def train_with_config(csv_path: str = None, config: dict = None):
         "message": f"✅ Dataset prepared and ready for training from {dataset_source}",
         "step": 0,
         "epoch": 0,
-        "dataset_size": len(dataset) if dataset else 0
+        "dataset_size": len(dataset) if dataset else 0,
+        "session_id": session_id
     }
-    with open('training_logs.jsonl', 'a') as f:
-        f.write(json.dumps(log_entry) + '\n')
+    write_log_entry(log_entry)
     
     # Training arguments with configurable parameters
     training_args = TrainingArguments(
@@ -292,10 +349,10 @@ def train_with_config(csv_path: str = None, config: dict = None):
             "learning_rate": training_args.learning_rate,
             "max_steps": training_args.max_steps,
             "warmup_steps": training_args.warmup_steps
-        }
+        },
+        "session_id": session_id
     }
-    with open('training_logs.jsonl', 'a') as f:
-        f.write(json.dumps(log_entry) + '\n')
+    write_log_entry(log_entry)
     
     # Create trainer with custom callback
     trainer = SFTTrainer(
@@ -336,11 +393,11 @@ def train_with_config(csv_path: str = None, config: dict = None):
             "train_steps_per_second": trainer_stats.metrics.get("train_steps_per_second"),
             "total_flos": trainer_stats.metrics.get("total_flos"),
             "train_loss": trainer_stats.metrics.get("train_loss")
-        }
+        },
+        "session_id": session_id
     }
     
-    with open('training_logs.jsonl', 'a') as f:
-        f.write(json.dumps(completion_log) + '\n')
+    write_log_entry(completion_log, "training_complete")
     
     print(f"Training completed! Final model saved to '{model_output_dir}'")
 

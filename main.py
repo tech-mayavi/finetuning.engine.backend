@@ -462,7 +462,7 @@ def run_training_job_with_data_file(job_id: str, data_file_path: str, config: Di
             config['output_dir'] = session_data['outputs_directory']
         
         # Call training function with data file and config
-        train_with_config(data_file_path, config)
+        train_with_config(data_file_path, config, job_id)
         
         training_jobs[job_id]["status"] = "completed"
         training_jobs[job_id]["completed_at"] = datetime.now().isoformat()
