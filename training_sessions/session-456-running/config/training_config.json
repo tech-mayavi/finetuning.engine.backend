@@ -1,0 +1,16 @@
+{
+  "model_name": "microsoft/Phi-3-mini-4k-instruct",
+  "max_seq_length": 2048,
+  "num_train_epochs": 5,
+  "per_device_train_batch_size": 4,
+  "gradient_accumulation_steps": 2,
+  "learning_rate": 0.0001,
+  "max_steps": 100,
+  "warmup_steps": 10,
+  "save_steps": 25,
+  "logging_steps": 1,
+  "output_dir": "./results",
+  "lora_r": 32,
+  "lora_alpha": 32,
+  "lora_dropout": 0.1
+}

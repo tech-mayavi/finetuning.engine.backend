@@ -42,45 +42,230 @@ app.add_middleware(
 # Store training jobs status
 training_jobs: Dict[str, Dict[str, Any]] = {}
 
-# Enhanced training session storage
-def save_training_session(session_id: str, session_data: Dict[str, Any]):
-    """Save training session to persistent storage"""
-    sessions_dir = "training_sessions"
-    if not os.path.exists(sessions_dir):
-        os.makedirs(sessions_dir)
+# Enhanced training session storage with folder structure
+def create_session_directory(session_id: str) -> str:
+    """Create a dedicated directory for a training session"""
+    sessions_base_dir = "training_sessions"
+    session_dir = os.path.join(sessions_base_dir, session_id)
     
-    session_file = os.path.join(sessions_dir, f"{session_id}.json")
-    with open(session_file, 'w') as f:
+    # Create main session directory
+    if not os.path.exists(session_dir):
+        os.makedirs(session_dir)
+    
+    # Create subdirectories
+    subdirs = ['logs', 'config', 'data', 'checkpoints', 'outputs', 'artifacts']
+    for subdir in subdirs:
+        subdir_path = os.path.join(session_dir, subdir)
+        if not os.path.exists(subdir_path):
+            os.makedirs(subdir_path)
+    
+    return session_dir
+
+def save_training_session(session_id: str, session_data: Dict[str, Any]):
+    """Save training session to persistent storage with folder structure"""
+    # Create session directory if it doesn't exist
+    session_dir = create_session_directory(session_id)
+    
+    # Save main metadata
+    metadata_file = os.path.join(session_dir, "metadata.json")
+    with open(metadata_file, 'w') as f:
         json.dump(session_data, f, indent=2, default=str)
+    
+    # Save detailed configuration
+    if 'config' in session_data:
+        config_file = os.path.join(session_dir, "config", "training_config.json")
+        with open(config_file, 'w') as f:
+            json.dump(session_data['config'], f, indent=2, default=str)
+    
+    # Save dataset information
+    if 'dataset_info' in session_data:
+        dataset_file = os.path.join(session_dir, "config", "dataset_info.json")
+        with open(dataset_file, 'w') as f:
+            json.dump(session_data['dataset_info'], f, indent=2, default=str)
+    
+    # Update session data with directory paths
+    session_data['session_directory'] = session_dir
+    session_data['logs_directory'] = os.path.join(session_dir, "logs")
+    session_data['config_directory'] = os.path.join(session_dir, "config")
+    session_data['data_directory'] = os.path.join(session_dir, "data")
+    session_data['checkpoints_directory'] = os.path.join(session_dir, "checkpoints")
+    session_data['outputs_directory'] = os.path.join(session_dir, "outputs")
+    session_data['artifacts_directory'] = os.path.join(session_dir, "artifacts")
 
 def load_training_session(session_id: str) -> Optional[Dict[str, Any]]:
-    """Load training session from persistent storage"""
-    sessions_dir = "training_sessions"
-    session_file = os.path.join(sessions_dir, f"{session_id}.json")
+    """Load training session from persistent storage (folder structure)"""
+    sessions_base_dir = "training_sessions"
     
-    if os.path.exists(session_file):
+    # Try new folder structure first
+    session_dir = os.path.join(sessions_base_dir, session_id)
+    metadata_file = os.path.join(session_dir, "metadata.json")
+    
+    if os.path.exists(metadata_file):
         try:
-            with open(session_file, 'r') as f:
-                return json.load(f)
+            with open(metadata_file, 'r') as f:
+                session_data = json.load(f)
+            
+            # Add directory paths
+            session_data['session_directory'] = session_dir
+            session_data['logs_directory'] = os.path.join(session_dir, "logs")
+            session_data['config_directory'] = os.path.join(session_dir, "config")
+            session_data['data_directory'] = os.path.join(session_dir, "data")
+            session_data['checkpoints_directory'] = os.path.join(session_dir, "checkpoints")
+            session_data['outputs_directory'] = os.path.join(session_dir, "outputs")
+            session_data['artifacts_directory'] = os.path.join(session_dir, "artifacts")
+            
+            return session_data
         except Exception as e:
             print(f"Error loading session {session_id}: {e}")
     
+    # Fallback to old JSON file structure for backward compatibility
+    old_session_file = os.path.join(sessions_base_dir, f"{session_id}.json")
+    if os.path.exists(old_session_file):
+        try:
+            with open(old_session_file, 'r') as f:
+                session_data = json.load(f)
+            
+            # Migrate to new folder structure
+            migrate_session_to_folder(session_id, session_data)
+            return session_data
+        except Exception as e:
+            print(f"Error loading legacy session {session_id}: {e}")
+    
     return None
 
+def migrate_session_to_folder(session_id: str, session_data: Dict[str, Any]):
+    """Migrate old JSON session to new folder structure"""
+    try:
+        # Create new folder structure
+        session_dir = create_session_directory(session_id)
+        
+        # Save to new structure
+        save_training_session(session_id, session_data)
+        
+        # Remove old JSON file
+        old_file = os.path.join("training_sessions", f"{session_id}.json")
+        if os.path.exists(old_file):
+            os.remove(old_file)
+        
+        print(f"Migrated session {session_id} to folder structure")
+    except Exception as e:
+        print(f"Error migrating session {session_id}: {e}")
+
 def list_training_sessions() -> List[Dict[str, Any]]:
-    """List all training sessions"""
-    sessions_dir = "training_sessions"
+    """List all training sessions (both folder and legacy formats)"""
+    sessions_base_dir = "training_sessions"
     sessions = []
     
-    if os.path.exists(sessions_dir):
-        for filename in os.listdir(sessions_dir):
-            if filename.endswith('.json'):
-                session_id = filename[:-5]  # Remove .json extension
-                session_data = load_training_session(session_id)
-                if session_data:
-                    sessions.append(session_data)
+    if not os.path.exists(sessions_base_dir):
+        return sessions
+    
+    for item in os.listdir(sessions_base_dir):
+        item_path = os.path.join(sessions_base_dir, item)
+        
+        # Check if it's a directory (new format)
+        if os.path.isdir(item_path):
+            session_data = load_training_session(item)
+            if session_data:
+                sessions.append(session_data)
+        
+        # Check if it's a JSON file (legacy format)
+        elif item.endswith('.json'):
+            session_id = item[:-5]  # Remove .json extension
+            session_data = load_training_session(session_id)
+            if session_data:
+                sessions.append(session_data)
     
     return sessions
+
+def save_session_logs(session_id: str, logs: List[Dict[str, Any]]):
+    """Save logs to session-specific log files"""
+    session_data = load_training_session(session_id)
+    if not session_data:
+        return
+    
+    logs_dir = session_data.get('logs_directory')
+    if not logs_dir or not os.path.exists(logs_dir):
+        return
+    
+    # Save training logs
+    training_log_file = os.path.join(logs_dir, "training.log")
+    metrics_file = os.path.join(logs_dir, "metrics.jsonl")
+    
+    with open(training_log_file, 'w') as f:
+        for log in logs:
+            f.write(f"[{log.get('timestamp', '')}] {log.get('level', 'INFO')}: {log.get('message', '')}\n")
+    
+    with open(metrics_file, 'w') as f:
+        for log in logs:
+            if log.get('type') in ['training_step', 'epoch_end', 'metrics']:
+                f.write(json.dumps(log) + '\n')
+
+def save_training_data_copy(session_id: str, data_file_path: str):
+    """Save a copy of training data to session directory"""
+    session_data = load_training_session(session_id)
+    if not session_data:
+        return
+    
+    data_dir = session_data.get('data_directory')
+    if not data_dir or not os.path.exists(data_dir):
+        return
+    
+    # Copy training data file
+    if os.path.exists(data_file_path):
+        filename = os.path.basename(data_file_path)
+        dest_path = os.path.join(data_dir, f"training_data_{filename}")
+        shutil.copy2(data_file_path, dest_path)
+        
+        # Update session metadata with data file path
+        session_data['training_data_file'] = dest_path
+        save_training_session(session_id, session_data)
+
+def get_session_files(session_id: str) -> Dict[str, Any]:
+    """Get all files and directories for a session"""
+    session_data = load_training_session(session_id)
+    if not session_data:
+        return {}
+    
+    session_dir = session_data.get('session_directory')
+    if not session_dir or not os.path.exists(session_dir):
+        return {}
+    
+    files_info = {
+        'session_id': session_id,
+        'session_directory': session_dir,
+        'directories': {},
+        'files': {}
+    }
+    
+    # Scan each subdirectory
+    subdirs = ['logs', 'config', 'data', 'checkpoints', 'outputs', 'artifacts']
+    for subdir in subdirs:
+        subdir_path = os.path.join(session_dir, subdir)
+        if os.path.exists(subdir_path):
+            files_info['directories'][subdir] = []
+            for file in os.listdir(subdir_path):
+                file_path = os.path.join(subdir_path, file)
+                if os.path.isfile(file_path):
+                    file_stat = os.stat(file_path)
+                    files_info['directories'][subdir].append({
+                        'name': file,
+                        'path': file_path,
+                        'size': file_stat.st_size,
+                        'modified': datetime.fromtimestamp(file_stat.st_mtime).isoformat()
+                    })
+    
+    # Add main metadata file
+    metadata_file = os.path.join(session_dir, "metadata.json")
+    if os.path.exists(metadata_file):
+        file_stat = os.stat(metadata_file)
+        files_info['files']['metadata'] = {
+            'name': 'metadata.json',
+            'path': metadata_file,
+            'size': file_stat.st_size,
+            'modified': datetime.fromtimestamp(file_stat.st_mtime).isoformat()
+        }
+    
+    return files_info
 
 # Configuration management models
 class ConfigSaveRequest(BaseModel):
@@ -268,12 +453,29 @@ def run_training_job_with_data_file(job_id: str, data_file_path: str, config: Di
         # Save updated session to persistent storage
         save_training_session(job_id, training_jobs[job_id])
         
+        # Save a copy of training data to session directory
+        save_training_data_copy(job_id, data_file_path)
+        
+        # Update config to use session-specific output directory
+        session_data = load_training_session(job_id)
+        if session_data and session_data.get('outputs_directory'):
+            config['output_dir'] = session_data['outputs_directory']
+        
         # Call training function with data file and config
         train_with_config(data_file_path, config)
         
         training_jobs[job_id]["status"] = "completed"
         training_jobs[job_id]["completed_at"] = datetime.now().isoformat()
         training_jobs[job_id]["message"] = "Training completed successfully"
+        
+        # Save logs to session directory
+        if os.path.exists('training_logs.jsonl'):
+            try:
+                with open('training_logs.jsonl', 'r') as f:
+                    logs = [json.loads(line) for line in f.readlines()]
+                save_session_logs(job_id, logs)
+            except Exception as log_error:
+                print(f"Warning: Could not save session logs: {log_error}")
         
         # Save final session state to persistent storage
         save_training_session(job_id, training_jobs[job_id])
@@ -1230,6 +1432,179 @@ def format_duration(seconds):
         hours = int(seconds // 3600)
         minutes = int((seconds % 3600) // 60)
         return f"{hours}h {minutes}m"
+
+@app.get("/api/training/{session_id}/files")
+async def get_training_session_files(session_id: str):
+    """Get all files and directories for a training session"""
+    
+    # Check if session exists
+    session_data = load_training_session(session_id)
+    if not session_data and session_id not in training_jobs:
+        raise HTTPException(status_code=404, detail="Training session not found")
+    
+    files_info = get_session_files(session_id)
+    if not files_info:
+        raise HTTPException(status_code=404, detail="Session files not found")
+    
+    return files_info
+
+@app.get("/api/training/{session_id}/files/{file_type}/{filename}")
+async def download_session_file(session_id: str, file_type: str, filename: str):
+    """Download a specific file from a training session"""
+    
+    # Check if session exists
+    session_data = load_training_session(session_id)
+    if not session_data:
+        raise HTTPException(status_code=404, detail="Training session not found")
+    
+    # Validate file type
+    allowed_types = ['logs', 'config', 'data', 'checkpoints', 'outputs', 'artifacts']
+    if file_type not in allowed_types:
+        raise HTTPException(status_code=400, detail=f"Invalid file type. Must be one of: {allowed_types}")
+    
+    # Construct file path
+    session_dir = session_data.get('session_directory')
+    if not session_dir:
+        raise HTTPException(status_code=404, detail="Session directory not found")
+    
+    file_path = os.path.join(session_dir, file_type, filename)
+    
+    # Check if file exists
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="File not found")
+    
+    # Return file as download
+    def file_generator():
+        with open(file_path, 'rb') as f:
+            while True:
+                chunk = f.read(8192)
+                if not chunk:
+                    break
+                yield chunk
+    
+    return StreamingResponse(
+        file_generator(),
+        media_type='application/octet-stream',
+        headers={
+            'Content-Disposition': f'attachment; filename="{filename}"'
+        }
+    )
+
+@app.get("/api/training/{session_id}/files/metadata")
+async def get_session_metadata_file(session_id: str):
+    """Download the metadata.json file for a training session"""
+    
+    # Check if session exists
+    session_data = load_training_session(session_id)
+    if not session_data:
+        raise HTTPException(status_code=404, detail="Training session not found")
+    
+    session_dir = session_data.get('session_directory')
+    if not session_dir:
+        raise HTTPException(status_code=404, detail="Session directory not found")
+    
+    metadata_file = os.path.join(session_dir, "metadata.json")
+    
+    if not os.path.exists(metadata_file):
+        raise HTTPException(status_code=404, detail="Metadata file not found")
+    
+    def file_generator():
+        with open(metadata_file, 'rb') as f:
+            while True:
+                chunk = f.read(8192)
+                if not chunk:
+                    break
+                yield chunk
+    
+    return StreamingResponse(
+        file_generator(),
+        media_type='application/json',
+        headers={
+            'Content-Disposition': f'attachment; filename="metadata_{session_id}.json"'
+        }
+    )
+
+@app.post("/api/training/{session_id}/archive")
+async def create_session_archive(session_id: str):
+    """Create a ZIP archive of the entire training session"""
+    
+    # Check if session exists
+    session_data = load_training_session(session_id)
+    if not session_data:
+        raise HTTPException(status_code=404, detail="Training session not found")
+    
+    session_dir = session_data.get('session_directory')
+    if not session_dir or not os.path.exists(session_dir):
+        raise HTTPException(status_code=404, detail="Session directory not found")
+    
+    import zipfile
+    import tempfile
+    
+    # Create temporary zip file
+    temp_zip = tempfile.NamedTemporaryFile(delete=False, suffix='.zip')
+    temp_zip.close()
+    
+    try:
+        with zipfile.ZipFile(temp_zip.name, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            # Walk through session directory and add all files
+            for root, dirs, files in os.walk(session_dir):
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    # Create archive path relative to session directory
+                    archive_path = os.path.relpath(file_path, session_dir)
+                    zipf.write(file_path, archive_path)
+        
+        # Return zip file as download
+        def file_generator():
+            with open(temp_zip.name, 'rb') as f:
+                while True:
+                    chunk = f.read(8192)
+                    if not chunk:
+                        break
+                    yield chunk
+            # Clean up temp file after streaming
+            os.unlink(temp_zip.name)
+        
+        return StreamingResponse(
+            file_generator(),
+            media_type='application/zip',
+            headers={
+                'Content-Disposition': f'attachment; filename="training_session_{session_id}.zip"'
+            }
+        )
+        
+    except Exception as e:
+        # Clean up temp file on error
+        if os.path.exists(temp_zip.name):
+            os.unlink(temp_zip.name)
+        raise HTTPException(status_code=500, detail=f"Error creating archive: {str(e)}")
+
+@app.delete("/api/training/{session_id}")
+async def delete_training_session(session_id: str):
+    """Delete a training session and all its files"""
+    
+    # Check if session exists
+    session_data = load_training_session(session_id)
+    if not session_data:
+        raise HTTPException(status_code=404, detail="Training session not found")
+    
+    session_dir = session_data.get('session_directory')
+    if session_dir and os.path.exists(session_dir):
+        try:
+            # Remove entire session directory
+            shutil.rmtree(session_dir)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Error deleting session directory: {str(e)}")
+    
+    # Remove from in-memory storage if present
+    if session_id in training_jobs:
+        del training_jobs[session_id]
+    
+    return {
+        "session_id": session_id,
+        "status": "deleted",
+        "message": "Training session and all associated files have been deleted"
+    }
 
 @app.get("/training/{session_id}", response_class=HTMLResponse)
 async def get_training_session_page(session_id: str):

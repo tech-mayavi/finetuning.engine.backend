@@ -1,0 +1,17 @@
+{
+  "total_rows": 5000,
+  "columns": [
+    "instruction",
+    "input",
+    "output"
+  ],
+  "null_counts": {},
+  "sample_data": [
+    {
+      "instruction": "Write a Python function to calculate fibonacci numbers",
+      "input": "",
+      "output": "def fibonacci(n):\n    if n <= 1:\n        return n\n    return fibonacci(n-1) + fibonacci(n-2)"
+    }
+  ],
+  "file_type": "JSONL"
+}

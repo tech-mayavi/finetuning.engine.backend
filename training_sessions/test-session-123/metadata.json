@@ -19,7 +19,11 @@
   },
   "dataset_info": {
     "total_rows": 1000,
-    "columns": ["instruction", "input", "output"],
+    "columns": [
+      "instruction",
+      "input",
+      "output"
+    ],
     "null_counts": {},
     "sample_data": [
       {
