@@ -265,6 +265,9 @@ def run_training_job_with_data_file(job_id: str, data_file_path: str, config: Di
         training_jobs[job_id]["status"] = "running"
         training_jobs[job_id]["started_at"] = datetime.now().isoformat()
         
+        # Save updated session to persistent storage
+        save_training_session(job_id, training_jobs[job_id])
+        
         # Call training function with data file and config
         train_with_config(data_file_path, config)
         
@@ -272,10 +275,16 @@ def run_training_job_with_data_file(job_id: str, data_file_path: str, config: Di
         training_jobs[job_id]["completed_at"] = datetime.now().isoformat()
         training_jobs[job_id]["message"] = "Training completed successfully"
         
+        # Save final session state to persistent storage
+        save_training_session(job_id, training_jobs[job_id])
+        
     except Exception as e:
         training_jobs[job_id]["status"] = "failed"
         training_jobs[job_id]["error"] = str(e)
         training_jobs[job_id]["failed_at"] = datetime.now().isoformat()
+        
+        # Save failed session state to persistent storage
+        save_training_session(job_id, training_jobs[job_id])
     finally:
         # Clean up temporary data file
         if os.path.exists(data_file_path):
@@ -964,12 +973,23 @@ async def cancel_job(job_id: str):
 async def get_training_session_status(session_id: str):
     """Get status of a specific training session"""
     
+    print(f"DEBUG: Looking for session {session_id}")
+    
     # Try to load from persistent storage first
     session_data = load_training_session(session_id)
+    print(f"DEBUG: Persistent storage result: {session_data is not None}")
+    
     if not session_data:
         # Fallback to in-memory storage
+        print(f"DEBUG: In-memory jobs: {list(training_jobs.keys())}")
         if session_id not in training_jobs:
-            raise HTTPException(status_code=404, detail="Training session not found")
+            # List available sessions for debugging
+            available_sessions = list_training_sessions()
+            print(f"DEBUG: Available persistent sessions: {[s.get('id') for s in available_sessions]}")
+            raise HTTPException(
+                status_code=404, 
+                detail=f"Training session not found. Available sessions: {len(available_sessions)}"
+            )
         session_data = training_jobs[session_id]
     
     # Try to read logs if they exist
