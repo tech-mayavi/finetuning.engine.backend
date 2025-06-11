@@ -42,6 +42,46 @@ app.add_middleware(
 # Store training jobs status
 training_jobs: Dict[str, Dict[str, Any]] = {}
 
+# Enhanced training session storage
+def save_training_session(session_id: str, session_data: Dict[str, Any]):
+    """Save training session to persistent storage"""
+    sessions_dir = "training_sessions"
+    if not os.path.exists(sessions_dir):
+        os.makedirs(sessions_dir)
+    
+    session_file = os.path.join(sessions_dir, f"{session_id}.json")
+    with open(session_file, 'w') as f:
+        json.dump(session_data, f, indent=2, default=str)
+
+def load_training_session(session_id: str) -> Optional[Dict[str, Any]]:
+    """Load training session from persistent storage"""
+    sessions_dir = "training_sessions"
+    session_file = os.path.join(sessions_dir, f"{session_id}.json")
+    
+    if os.path.exists(session_file):
+        try:
+            with open(session_file, 'r') as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"Error loading session {session_id}: {e}")
+    
+    return None
+
+def list_training_sessions() -> List[Dict[str, Any]]:
+    """List all training sessions"""
+    sessions_dir = "training_sessions"
+    sessions = []
+    
+    if os.path.exists(sessions_dir):
+        for filename in os.listdir(sessions_dir):
+            if filename.endswith('.json'):
+                session_id = filename[:-5]  # Remove .json extension
+                session_data = load_training_session(session_id)
+                if session_data:
+                    sessions.append(session_data)
+    
+    return sessions
+
 # Configuration management models
 class ConfigSaveRequest(BaseModel):
     name: str
@@ -435,7 +475,7 @@ async def handle_multipart_request(request: Request, background_tasks: Backgroun
         }
         
         # Initialize job tracking
-        training_jobs[job_id] = {
+        session_data = {
             "id": job_id,
             "status": "queued",
             "config": config,
@@ -445,6 +485,11 @@ async def handle_multipart_request(request: Request, background_tasks: Backgroun
             "upload_method": "multipart"
         }
         
+        training_jobs[job_id] = session_data
+        
+        # Save session to persistent storage
+        save_training_session(job_id, session_data)
+        
         # Start training in background
         background_tasks.add_task(run_training_job_with_data_file, job_id, temp_file_path, config)
         
@@ -452,7 +497,8 @@ async def handle_multipart_request(request: Request, background_tasks: Backgroun
             "job_id": job_id,
             "status": "queued",
             "message": f"Finetuning job queued with {validation_result['total_rows']} training samples from {validation_result['file_type']} file (multipart upload)",
-            "dashboard_url": "https://finetune_engine.deepcite.in/dashboard",
+            "dashboard_url": f"https://finetune_engine.deepcite.in/training/{job_id}",
+            "training_url": f"https://finetune_engine.deepcite.in/training/{job_id}",
             "dataset_info": validation_result,
             "config": config
         }
@@ -909,6 +955,361 @@ async def cancel_job(job_id: str):
         "status": "cancelled",
         "message": "Job has been cancelled"
     }
+
+# ============================================================================
+# TRAINING SESSION SPECIFIC ENDPOINTS
+# ============================================================================
+
+@app.get("/api/training/{session_id}/status")
+async def get_training_session_status(session_id: str):
+    """Get status of a specific training session"""
+    
+    # Try to load from persistent storage first
+    session_data = load_training_session(session_id)
+    if not session_data:
+        # Fallback to in-memory storage
+        if session_id not in training_jobs:
+            raise HTTPException(status_code=404, detail="Training session not found")
+        session_data = training_jobs[session_id]
+    
+    # Try to read logs if they exist
+    logs = []
+    if os.path.exists('training_logs.jsonl'):
+        try:
+            with open('training_logs.jsonl', 'r') as f:
+                logs = [json.loads(line) for line in f.readlines()]
+        except Exception:
+            pass
+    
+    return {
+        "session_id": session_id,
+        "status": session_data["status"],
+        "config": session_data.get("config", {}),
+        "dataset_info": session_data.get("dataset_info", {}),
+        "created_at": session_data.get("created_at"),
+        "started_at": session_data.get("started_at"),
+        "completed_at": session_data.get("completed_at"),
+        "progress": session_data.get("progress"),
+        "logs": logs[-10:],  # Return last 10 log entries
+        "error": session_data.get("error")
+    }
+
+@app.get("/api/training/{session_id}/logs")
+async def get_training_session_logs(session_id: str):
+    """Get detailed logs for a specific training session"""
+    
+    # Check if session exists
+    session_data = load_training_session(session_id)
+    if not session_data and session_id not in training_jobs:
+        raise HTTPException(status_code=404, detail="Training session not found")
+    
+    logs = []
+    if os.path.exists('training_logs.jsonl'):
+        try:
+            with open('training_logs.jsonl', 'r') as f:
+                logs = [json.loads(line) for line in f.readlines()]
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Error reading logs: {str(e)}")
+    
+    return {
+        "session_id": session_id,
+        "logs": logs
+    }
+
+@app.get("/api/training/{session_id}/metrics")
+async def get_training_session_metrics(session_id: str):
+    """Get training metrics for a specific session"""
+    
+    # Check if session exists
+    session_data = load_training_session(session_id)
+    if not session_data and session_id not in training_jobs:
+        raise HTTPException(status_code=404, detail="Training session not found")
+    
+    logs = []
+    if os.path.exists('training_logs.jsonl'):
+        try:
+            with open('training_logs.jsonl', 'r') as f:
+                logs = [json.loads(line) for line in f.readlines()]
+        except Exception:
+            pass
+    
+    # Extract metrics from logs
+    training_metrics = []
+    validation_metrics = []
+    
+    for log in logs:
+        if log.get("type") == "training_step":
+            training_metrics.append({
+                "step": log.get("step", 0),
+                "epoch": log.get("epoch", 0),
+                "loss": log.get("loss"),
+                "learning_rate": log.get("learning_rate"),
+                "grad_norm": log.get("grad_norm"),
+                "step_time": log.get("step_time"),
+                "timestamp": log.get("timestamp")
+            })
+        elif log.get("type") == "epoch_end":
+            validation_metrics.append({
+                "epoch": log.get("epoch", 0),
+                "train_loss": log.get("train_loss"),
+                "eval_loss": log.get("eval_loss"),
+                "timestamp": log.get("timestamp")
+            })
+    
+    return {
+        "session_id": session_id,
+        "training_metrics": training_metrics,
+        "validation_metrics": validation_metrics,
+        "total_training_steps": len(training_metrics),
+        "total_epochs": len(validation_metrics)
+    }
+
+@app.get("/api/training/sessions")
+async def list_all_training_sessions():
+    """List all training sessions (both active and completed)"""
+    
+    # Get sessions from persistent storage
+    persistent_sessions = list_training_sessions()
+    
+    # Get active sessions from memory
+    active_sessions = list(training_jobs.values())
+    
+    # Combine and deduplicate
+    all_sessions = {}
+    
+    # Add persistent sessions
+    for session in persistent_sessions:
+        all_sessions[session["id"]] = session
+    
+    # Add/update with active sessions
+    for session in active_sessions:
+        session_id = session["id"]
+        if session_id in all_sessions:
+            # Update with latest data from memory
+            all_sessions[session_id].update(session)
+        else:
+            all_sessions[session_id] = session
+    
+    # Convert to list and sort by creation date
+    sessions_list = list(all_sessions.values())
+    sessions_list.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+    
+    return {
+        "sessions": sessions_list,
+        "total": len(sessions_list)
+    }
+
+@app.get("/training/{session_id}", response_class=HTMLResponse)
+async def get_training_session_page(session_id: str):
+    """Serve a dedicated page for a specific training session"""
+    
+    # Check if session exists
+    session_data = load_training_session(session_id)
+    if not session_data and session_id not in training_jobs:
+        raise HTTPException(status_code=404, detail="Training session not found")
+    
+    # Get session data
+    if session_data:
+        session_info = session_data
+    else:
+        session_info = training_jobs[session_id]
+    
+    session_html = f'''
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Training Session {session_id}</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body {{ font-family: Arial, sans-serif; margin: 20px; background-color: #f5f5f5; }}
+        .container {{ max-width: 1200px; margin: 0 auto; }}
+        .header {{ background: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
+        .session-info {{ display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; margin-bottom: 20px; }}
+        .info-card {{ background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
+        .status-badge {{ padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: bold; }}
+        .status-queued {{ background: #fef3c7; color: #92400e; }}
+        .status-running {{ background: #d1fae5; color: #065f46; }}
+        .status-completed {{ background: #dbeafe; color: #1e40af; }}
+        .status-failed {{ background: #fee2e2; color: #991b1b; }}
+        .charts-container {{ display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px; }}
+        .chart-container {{ background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
+        .logs-container {{ background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
+        .log-entry {{ padding: 8px; border-bottom: 1px solid #eee; font-family: monospace; font-size: 12px; }}
+        .share-url {{ background: #f8f9fa; padding: 10px; border-radius: 4px; font-family: monospace; font-size: 14px; margin-top: 10px; }}
+        .copy-btn {{ background: #007bff; color: white; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer; margin-left: 10px; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Training Session</h1>
+            <p><strong>Session ID:</strong> {session_id}</p>
+            <p><strong>Status:</strong> <span class="status-badge status-{session_info.get('status', 'unknown')}">{session_info.get('status', 'Unknown').title()}</span></p>
+            <p><strong>Created:</strong> {session_info.get('created_at', 'Unknown')}</p>
+            
+            <div class="share-url">
+                <strong>Share this training session:</strong><br>
+                <span id="shareUrl">https://finetune_engine.deepcite.in/training/{session_id}</span>
+                <button class="copy-btn" onclick="copyToClipboard()">Copy URL</button>
+            </div>
+        </div>
+        
+        <div class="session-info">
+            <div class="info-card">
+                <h3>Model Configuration</h3>
+                <p><strong>Model:</strong> {session_info.get('config', {}).get('model_name', 'N/A')}</p>
+                <p><strong>Epochs:</strong> {session_info.get('config', {}).get('num_train_epochs', 'N/A')}</p>
+                <p><strong>Learning Rate:</strong> {session_info.get('config', {}).get('learning_rate', 'N/A')}</p>
+            </div>
+            
+            <div class="info-card">
+                <h3>Dataset Information</h3>
+                <p><strong>Total Rows:</strong> {session_info.get('dataset_info', {}).get('total_rows', 'N/A')}</p>
+                <p><strong>File Type:</strong> {session_info.get('dataset_info', {}).get('file_type', 'N/A')}</p>
+                <p><strong>Upload Method:</strong> {session_info.get('upload_method', 'N/A')}</p>
+            </div>
+            
+            <div class="info-card">
+                <h3>Training Progress</h3>
+                <p><strong>Current Status:</strong> {session_info.get('status', 'Unknown')}</p>
+                <p><strong>Started:</strong> {session_info.get('started_at', 'Not started')}</p>
+                <p><strong>Completed:</strong> {session_info.get('completed_at', 'Not completed')}</p>
+            </div>
+        </div>
+        
+        <div class="charts-container">
+            <div class="chart-container">
+                <h3>Training Loss</h3>
+                <canvas id="lossChart"></canvas>
+            </div>
+            <div class="chart-container">
+                <h3>Learning Rate</h3>
+                <canvas id="lrChart"></canvas>
+            </div>
+        </div>
+        
+        <div class="logs-container">
+            <h3>Training Logs</h3>
+            <div id="logs" style="height: 400px; overflow-y: auto;"></div>
+        </div>
+    </div>
+
+    <script>
+        let lossChart, lrChart;
+        const sessionId = '{session_id}';
+        
+        function initCharts() {{
+            const lossCtx = document.getElementById('lossChart').getContext('2d');
+            lossChart = new Chart(lossCtx, {{
+                type: 'line',
+                data: {{
+                    labels: [],
+                    datasets: [{{
+                        label: 'Training Loss',
+                        data: [],
+                        borderColor: 'rgb(75, 192, 192)',
+                        tension: 0.1
+                    }}]
+                }},
+                options: {{
+                    responsive: true,
+                    scales: {{
+                        y: {{
+                            beginAtZero: false
+                        }}
+                    }}
+                }}
+            }});
+            
+            const lrCtx = document.getElementById('lrChart').getContext('2d');
+            lrChart = new Chart(lrCtx, {{
+                type: 'line',
+                data: {{
+                    labels: [],
+                    datasets: [{{
+                        label: 'Learning Rate',
+                        data: [],
+                        borderColor: 'rgb(255, 99, 132)',
+                        tension: 0.1
+                    }}]
+                }},
+                options: {{
+                    responsive: true,
+                    scales: {{
+                        y: {{
+                            beginAtZero: true
+                        }}
+                    }}
+                }}
+            }});
+        }}
+        
+        function updateDashboard() {{
+            fetch(`/api/training/${{sessionId}}/metrics`)
+                .then(response => response.json())
+                .then(data => {{
+                    updateCharts(data.training_metrics);
+                }});
+            
+            fetch(`/api/training/${{sessionId}}/logs`)
+                .then(response => response.json())
+                .then(data => {{
+                    updateLogs(data.logs);
+                }});
+        }}
+        
+        function updateCharts(metrics) {{
+            const lossData = [];
+            const lrData = [];
+            const labels = [];
+            
+            metrics.forEach(metric => {{
+                if (metric.loss !== undefined) {{
+                    labels.push(metric.step);
+                    lossData.push(metric.loss);
+                    lrData.push(metric.learning_rate);
+                }}
+            }});
+            
+            lossChart.data.labels = labels;
+            lossChart.data.datasets[0].data = lossData;
+            lossChart.update();
+            
+            lrChart.data.labels = labels;
+            lrChart.data.datasets[0].data = lrData;
+            lrChart.update();
+        }}
+        
+        function updateLogs(logs) {{
+            const logsEl = document.getElementById('logs');
+            const recentLogs = logs.slice(-50).reverse();
+            
+            logsEl.innerHTML = recentLogs.map(log => `
+                <div class="log-entry">
+                    [${{log.timestamp}}] ${{log.level}}: ${{log.message}}
+                </div>
+            `).join('');
+        }}
+        
+        function copyToClipboard() {{
+            const url = document.getElementById('shareUrl').textContent;
+            navigator.clipboard.writeText(url).then(() => {{
+                alert('URL copied to clipboard!');
+            }});
+        }}
+        
+        // Initialize
+        initCharts();
+        updateDashboard();
+        
+        // Update every 3 seconds
+        setInterval(updateDashboard, 3000);
+    </script>
+</body>
+</html>
+    '''
+    
+    return session_html
 
 # ============================================================================
 # CHAT API ENDPOINTS
