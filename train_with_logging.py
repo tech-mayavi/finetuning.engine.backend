@@ -345,7 +345,7 @@ def train_with_config(csv_path: str = None, config: dict = None, session_id: str
         dataset_num_proc=2,
         packing=False,
         args=training_args,
-        callbacks=[DetailedLoggingCallback(logging_steps=config.get("logging_steps", 1))]
+        callbacks=[DetailedLoggingCallback(logging_steps=config.get("logging_steps", 1), session_id=session_id)]
     )
     
     # Show model info

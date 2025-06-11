@@ -9,11 +9,12 @@ import os
 class DetailedLoggingCallback(TrainerCallback):
     """Custom callback for detailed training logging"""
     
-    def __init__(self, logging_steps=1):
+    def __init__(self, logging_steps=1, session_id=None):
         self.start_time = None
         self.step_times = []
         self.last_step_time = None
         self.logging_steps = logging_steps
+        self.session_id = session_id
         
     def on_train_begin(self, args, state, control, **kwargs):
         """Called at the beginning of training"""
@@ -184,8 +185,21 @@ class DetailedLoggingCallback(TrainerCallback):
     def _write_log(self, log_entry):
         """Write log entry to file"""
         try:
-            with open('training_logs.jsonl', 'a') as f:
-                f.write(json.dumps(log_entry) + '\n')
+            # Add session_id to log entry if available
+            if self.session_id:
+                log_entry['session_id'] = self.session_id
+                
+                # Write to session-specific training_logs.jsonl file
+                session_logs_dir = f"training_sessions/{self.session_id}/logs"
+                os.makedirs(session_logs_dir, exist_ok=True)
+                session_training_log_file = os.path.join(session_logs_dir, "training_logs.jsonl")
+                
+                with open(session_training_log_file, 'a') as f:
+                    f.write(json.dumps(log_entry) + '\n')
+            else:
+                # Fallback to global log file if no session_id
+                with open('training_logs.jsonl', 'a') as f:
+                    f.write(json.dumps(log_entry) + '\n')
         except Exception as e:
             print(f"Error writing log: {e}")
 
