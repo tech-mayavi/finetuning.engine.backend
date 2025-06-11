@@ -1226,16 +1226,54 @@ async def get_training_session_logs(session_id: str):
         raise HTTPException(status_code=404, detail="Training session not found")
     
     logs = []
-    if os.path.exists('training_logs.jsonl'):
+    
+    # Try to read from session-specific log files first
+    if session_data and session_data.get('logs_directory'):
+        logs_dir = session_data['logs_directory']
+        
+        # Read from session-specific metrics.jsonl
+        metrics_file = os.path.join(logs_dir, "metrics.jsonl")
+        if os.path.exists(metrics_file):
+            try:
+                with open(metrics_file, 'r') as f:
+                    for line in f:
+                        if line.strip():
+                            logs.append(json.loads(line))
+            except Exception as e:
+                print(f"Warning: Could not read session metrics: {e}")
+        
+        # Read from session-specific console.log
+        console_file = os.path.join(logs_dir, "console.log")
+        if os.path.exists(console_file):
+            try:
+                with open(console_file, 'r') as f:
+                    for line in f:
+                        if line.strip():
+                            logs.append(json.loads(line))
+            except Exception as e:
+                print(f"Warning: Could not read session console logs: {e}")
+    
+    # Fallback to global logs if no session-specific logs found
+    if not logs and os.path.exists('training_logs.jsonl'):
         try:
             with open('training_logs.jsonl', 'r') as f:
-                logs = [json.loads(line) for line in f.readlines()]
+                all_logs = [json.loads(line) for line in f.readlines() if line.strip()]
+            
+            # Filter logs for this specific session
+            logs = [log for log in all_logs if log.get('session_id') == session_id]
+            
+            # If no session-specific logs found, return all logs for backward compatibility
+            if not logs:
+                logs = all_logs
+                
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Error reading logs: {str(e)}")
     
     return {
         "session_id": session_id,
-        "logs": logs
+        "logs": logs,
+        "total_logs": len(logs),
+        "source": "session_specific" if session_data and session_data.get('logs_directory') else "global"
     }
 
 @app.get("/api/training/{session_id}/metrics")
@@ -1248,10 +1286,34 @@ async def get_training_session_metrics(session_id: str):
         raise HTTPException(status_code=404, detail="Training session not found")
     
     logs = []
-    if os.path.exists('training_logs.jsonl'):
+    
+    # Try to read from session-specific metrics file first
+    if session_data and session_data.get('logs_directory'):
+        logs_dir = session_data['logs_directory']
+        metrics_file = os.path.join(logs_dir, "metrics.jsonl")
+        
+        if os.path.exists(metrics_file):
+            try:
+                with open(metrics_file, 'r') as f:
+                    for line in f:
+                        if line.strip():
+                            logs.append(json.loads(line))
+            except Exception as e:
+                print(f"Warning: Could not read session metrics: {e}")
+    
+    # Fallback to global logs if no session-specific metrics found
+    if not logs and os.path.exists('training_logs.jsonl'):
         try:
             with open('training_logs.jsonl', 'r') as f:
-                logs = [json.loads(line) for line in f.readlines()]
+                all_logs = [json.loads(line) for line in f.readlines() if line.strip()]
+            
+            # Filter logs for this specific session
+            logs = [log for log in all_logs if log.get('session_id') == session_id]
+            
+            # If no session-specific logs found, return all logs for backward compatibility
+            if not logs:
+                logs = all_logs
+                
         except Exception:
             pass
     
@@ -1283,7 +1345,8 @@ async def get_training_session_metrics(session_id: str):
         "training_metrics": training_metrics,
         "validation_metrics": validation_metrics,
         "total_training_steps": len(training_metrics),
-        "total_epochs": len(validation_metrics)
+        "total_epochs": len(validation_metrics),
+        "source": "session_specific" if session_data and session_data.get('logs_directory') else "global"
     }
 
 @app.get("/api/training/sessions")
