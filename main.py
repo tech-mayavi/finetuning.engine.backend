@@ -915,16 +915,99 @@ async def get_job_logs(job_id: str):
 # Monitoring API endpoints (moved from Flask to FastAPI)
 @app.get("/api/logs")
 async def get_training_logs():
-    """API endpoint to get training logs"""
-    logs = []
+    """API endpoint to get aggregated training logs from all sessions"""
+    all_logs = []
+    
+    # Get all training sessions
+    sessions = list_training_sessions()
+    
+    # Read logs from each session's log files
+    for session in sessions:
+        session_id = session.get('id')
+        if not session_id:
+            continue
+        
+        # Try to read from session-specific log files
+        logs_dir = session.get('logs_directory')
+        if logs_dir and os.path.exists(logs_dir):
+            
+            # Read from session-specific metrics.jsonl
+            metrics_file = os.path.join(logs_dir, "metrics.jsonl")
+            if os.path.exists(metrics_file):
+                try:
+                    with open(metrics_file, 'r') as f:
+                        for line in f:
+                            if line.strip():
+                                log_entry = json.loads(line)
+                                log_entry['source'] = 'session_specific'
+                                log_entry['session_id'] = session_id
+                                all_logs.append(log_entry)
+                except Exception as e:
+                    print(f"Warning: Could not read session metrics for {session_id}: {e}")
+            
+            # Read from session-specific console.log
+            console_file = os.path.join(logs_dir, "console.log")
+            if os.path.exists(console_file):
+                try:
+                    with open(console_file, 'r') as f:
+                        for line in f:
+                            if line.strip():
+                                log_entry = json.loads(line)
+                                log_entry['source'] = 'session_specific'
+                                log_entry['session_id'] = session_id
+                                all_logs.append(log_entry)
+                except Exception as e:
+                    print(f"Warning: Could not read session console logs for {session_id}: {e}")
+    
+    # Fallback: Read from global training_logs.jsonl if no session logs found
+    if not all_logs and os.path.exists('training_logs.jsonl'):
+        try:
+            with open('training_logs.jsonl', 'r') as f:
+                for line in f:
+                    if line.strip():
+                        log_entry = json.loads(line)
+                        log_entry['source'] = 'global'
+                        all_logs.append(log_entry)
+        except Exception as e:
+            print(f"Warning: Could not read global logs: {e}")
+    
+    # Also include any recent global logs that might not be in sessions yet
     if os.path.exists('training_logs.jsonl'):
         try:
             with open('training_logs.jsonl', 'r') as f:
-                logs = [json.loads(line) for line in f.readlines()]
+                for line in f:
+                    if line.strip():
+                        log_entry = json.loads(line)
+                        # Only add if not already included from session-specific logs
+                        session_id = log_entry.get('session_id')
+                        if session_id:
+                            # Check if we already have logs for this session
+                            existing_session_logs = [log for log in all_logs if log.get('session_id') == session_id]
+                            if not existing_session_logs:
+                                log_entry['source'] = 'global_fallback'
+                                all_logs.append(log_entry)
+                        else:
+                            # Legacy log without session_id
+                            log_entry['source'] = 'global_legacy'
+                            all_logs.append(log_entry)
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Error reading logs: {str(e)}")
+            print(f"Warning: Could not read global logs for fallback: {e}")
     
-    return {"logs": logs}
+    # Sort logs by timestamp (newest first)
+    try:
+        all_logs.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
+    except Exception as e:
+        print(f"Warning: Could not sort logs: {e}")
+    
+    return {
+        "logs": all_logs,
+        "total_logs": len(all_logs),
+        "sources": {
+            "session_specific": len([log for log in all_logs if log.get('source') == 'session_specific']),
+            "global_fallback": len([log for log in all_logs if log.get('source') == 'global_fallback']),
+            "global_legacy": len([log for log in all_logs if log.get('source') == 'global_legacy'])
+        }
+    }
 
 @app.get("/api/status")
 async def get_training_status():
@@ -1227,31 +1310,21 @@ async def get_training_session_logs(session_id: str):
     
     logs = []
     
-    # Try to read from session-specific log files first
+    # Try to read from session-specific training_logs.jsonl file first
     if session_data and session_data.get('logs_directory'):
         logs_dir = session_data['logs_directory']
         
-        # Read from session-specific metrics.jsonl
-        metrics_file = os.path.join(logs_dir, "metrics.jsonl")
-        if os.path.exists(metrics_file):
+        # Read from session-specific training_logs.jsonl
+        session_training_logs_file = os.path.join(logs_dir, "training_logs.jsonl")
+        if os.path.exists(session_training_logs_file):
             try:
-                with open(metrics_file, 'r') as f:
+                with open(session_training_logs_file, 'r') as f:
                     for line in f:
                         if line.strip():
                             logs.append(json.loads(line))
+                print(f"Read {len(logs)} logs from session-specific training_logs.jsonl")
             except Exception as e:
-                print(f"Warning: Could not read session metrics: {e}")
-        
-        # Read from session-specific console.log
-        console_file = os.path.join(logs_dir, "console.log")
-        if os.path.exists(console_file):
-            try:
-                with open(console_file, 'r') as f:
-                    for line in f:
-                        if line.strip():
-                            logs.append(json.loads(line))
-            except Exception as e:
-                print(f"Warning: Could not read session console logs: {e}")
+                print(f"Warning: Could not read session training logs: {e}")
     
     # Fallback to global logs if no session-specific logs found
     if not logs and os.path.exists('training_logs.jsonl'):
@@ -1273,7 +1346,7 @@ async def get_training_session_logs(session_id: str):
         "session_id": session_id,
         "logs": logs,
         "total_logs": len(logs),
-        "source": "session_specific" if session_data and session_data.get('logs_directory') else "global"
+        "source": "session_specific" if session_data and session_data.get('logs_directory') and os.path.exists(os.path.join(session_data['logs_directory'], "training_logs.jsonl")) else "global"
     }
 
 @app.get("/api/training/{session_id}/metrics")

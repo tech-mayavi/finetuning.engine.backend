@@ -176,36 +176,17 @@ def train_with_config(csv_path: str = None, config: dict = None, session_id: str
         print("Starting training with global logging...")
         print("Dashboard available at: http://localhost:8000/dashboard")
     
-    # Helper function to write logs to both session and global files
+    # Helper function to write logs to session-specific training_logs.jsonl file only
     def write_log_entry(log_entry, log_type="general"):
-        # Write to global log file (for backward compatibility)
-        with open(global_log_file, 'a') as f:
-            f.write(json.dumps(log_entry) + '\n')
-        
-        # Write to session-specific log files if session_id is provided
+        # Write to session-specific training_logs.jsonl file if session_id is provided
         if session_id:
-            # Write to human-readable training log
-            if training_log_file:
-                with open(training_log_file, 'a') as f:
-                    timestamp = log_entry.get('timestamp', '')
-                    level = log_entry.get('level', 'INFO')
-                    message = log_entry.get('message', '')
-                    f.write(f"[{timestamp}] {level}: {message}\n")
-            
-            # Write to structured metrics log
-            if metrics_log_file and log_type in ['metrics', 'training_step', 'epoch_end']:
-                with open(metrics_log_file, 'a') as f:
-                    f.write(json.dumps(log_entry) + '\n')
-            
-            # Write to console log for important messages
-            if console_log_file and log_entry.get('level') in ['INFO', 'WARNING', 'ERROR']:
-                with open(console_log_file, 'a') as f:
-                    f.write(json.dumps(log_entry) + '\n')
-            
-            # Write to errors log for errors only
-            if errors_log_file and log_entry.get('level') == 'ERROR':
-                with open(errors_log_file, 'a') as f:
-                    f.write(json.dumps(log_entry) + '\n')
+            session_training_log_file = os.path.join(session_logs_dir, "training_logs.jsonl")
+            with open(session_training_log_file, 'a') as f:
+                f.write(json.dumps(log_entry) + '\n')
+        else:
+            # Fallback to global log file if no session_id (for backward compatibility)
+            with open('training_logs.jsonl', 'a') as f:
+                f.write(json.dumps(log_entry) + '\n')
     
     # Log configuration
     log_entry = {
