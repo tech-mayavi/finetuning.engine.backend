@@ -2347,7 +2347,7 @@ async def get_model_status():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error getting model status: {str(e)}")
 
-@app.post("/models/load", response_model=ModelResponse)
+@app.post("/api/models/load", response_model=ModelResponse)
 async def load_model(request: ModelLoadRequest):
     """Load a specific model for chat"""
     try:
@@ -2366,7 +2366,7 @@ async def load_model(request: ModelLoadRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error loading model: {str(e)}")
 
-@app.post("/models/unload", response_model=ModelResponse)
+@app.post("/api/models/unload", response_model=ModelResponse)
 async def unload_model():
     """Unload the current model to free memory"""
     try:
