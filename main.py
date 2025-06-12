@@ -304,6 +304,7 @@ class FinetuneRequest(BaseModel):
     lora_r: Optional[int] = 16
     lora_alpha: Optional[int] = 16
     lora_dropout: Optional[float] = 0.0
+    max_sample_size: Optional[int] = None  # Limit number of training samples
     
     class Config:
         # Allow extra fields to be ignored

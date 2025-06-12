@@ -38,8 +38,8 @@ def setup_model_and_tokenizer():
     
     return model, tokenizer
 
-def prepare_dataset_from_file(file_path: str, tokenizer):
-    """Prepare dataset from CSV, JSON, or JSONL file"""
+def prepare_dataset_from_file(file_path: str, tokenizer, max_sample_size: int = None):
+    """Prepare dataset from CSV, JSON, or JSONL file with optional sampling"""
     file_extension = os.path.splitext(file_path)[1].lower()
     
     if file_extension == '.csv':
@@ -76,6 +76,17 @@ def prepare_dataset_from_file(file_path: str, tokenizer):
     
     else:
         raise ValueError(f"Unsupported file format: {file_extension}")
+    
+    # Apply sampling if max_sample_size is specified
+    original_size = len(df)
+    if max_sample_size is not None and max_sample_size > 0 and max_sample_size < original_size:
+        # Use random sampling to get a representative subset
+        df = df.sample(n=max_sample_size, random_state=42).reset_index(drop=True)
+        print(f"Dataset sampled: Using {len(df)} samples out of {original_size} available ({(len(df)/original_size)*100:.1f}%)")
+    elif max_sample_size is not None and max_sample_size >= original_size:
+        print(f"Max sample size ({max_sample_size}) is greater than or equal to available data ({original_size}). Using all data.")
+    else:
+        print(f"Using all available data: {original_size} samples")
     
     def formatting_prompts_func(examples):
         instructions = examples["instruction"]
@@ -276,7 +287,8 @@ def train_with_config(csv_path: str = None, config: dict = None, session_id: str
     
     # Prepare dataset (file or default)
     if csv_path and os.path.exists(csv_path):
-        dataset = prepare_dataset_from_file(csv_path, tokenizer)
+        max_sample_size = config.get("max_sample_size")
+        dataset = prepare_dataset_from_file(csv_path, tokenizer, max_sample_size)
         file_extension = os.path.splitext(csv_path)[1].upper()
         dataset_source = f"{file_extension[1:]} file: {os.path.basename(csv_path)}"
     else:
