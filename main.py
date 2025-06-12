@@ -1971,6 +1971,91 @@ async def get_available_models():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error getting available models: {str(e)}")
 
+@app.get("/models/huggingface")
+async def get_huggingface_models():
+    """Get curated list of popular verified Hugging Face models"""
+    try:
+        # Return curated list of verified popular models
+        curated_models = [
+            {
+                "id": "microsoft-phi-3-mini-4k-instruct",
+                "name": "microsoft/Phi-3-mini-4k-instruct",
+                "description": "Microsoft Phi-3 Mini 4K context instruction model",
+                "size": "3.8B",
+                "architecture": "Phi-3",
+                "family": "Microsoft",
+                "isBase": True,
+                "hf_model_id": "microsoft/Phi-3-mini-4k-instruct"
+            },
+            {
+                "id": "meta-llama-3.2-3b-instruct",
+                "name": "meta-llama/Llama-3.2-3B-Instruct",
+                "description": "Meta Llama 3.2 3B instruction-tuned model",
+                "size": "3B",
+                "architecture": "Llama-3.2",
+                "family": "Meta",
+                "isBase": True,
+                "hf_model_id": "meta-llama/Llama-3.2-3B-Instruct"
+            },
+            {
+                "id": "mistralai-mistral-7b-instruct-v0.3",
+                "name": "mistralai/Mistral-7B-Instruct-v0.3",
+                "description": "Mistral 7B instruction-tuned model v0.3",
+                "size": "7B",
+                "architecture": "Mistral",
+                "family": "Mistral",
+                "isBase": True,
+                "hf_model_id": "mistralai/Mistral-7B-Instruct-v0.3"
+            },
+            {
+                "id": "google-gemma-2-2b-it",
+                "name": "google/gemma-2-2b-it",
+                "description": "Google Gemma 2 2B instruction-tuned model",
+                "size": "2B",
+                "architecture": "Gemma-2",
+                "family": "Google",
+                "isBase": True,
+                "hf_model_id": "google/gemma-2-2b-it"
+            },
+            {
+                "id": "qwen-qwen2.5-7b-instruct",
+                "name": "Qwen/Qwen2.5-7B-Instruct",
+                "description": "Qwen2.5 7B parameter instruction-tuned model",
+                "size": "7B",
+                "architecture": "Qwen2.5",
+                "family": "Qwen",
+                "isBase": True,
+                "hf_model_id": "Qwen/Qwen2.5-7B-Instruct"
+            }
+        ]
+        
+        return {
+            "status": "success",
+            "models": curated_models,
+            "total": len(curated_models)
+        }
+        
+    except Exception as e:
+        # Fallback to minimal list if any error
+        fallback_models = [
+            {
+                "id": "microsoft-phi-3-mini-4k-instruct",
+                "name": "microsoft/Phi-3-mini-4k-instruct",
+                "description": "Microsoft 3.8B parameter instruction model",
+                "size": "3.8B",
+                "architecture": "Phi",
+                "family": "Microsoft",
+                "isBase": True,
+                "hf_model_id": "microsoft/Phi-3-mini-4k-instruct"
+            }
+        ]
+        
+        return {
+            "status": "success",
+            "models": fallback_models,
+            "total": len(fallback_models),
+            "note": "Using fallback models"
+        }
 
 @app.get("/models/huggingface/search")
 async def search_huggingface_models(query: str, limit: int = 20):
@@ -2132,6 +2217,7 @@ async def search_huggingface_models(query: str, limit: int = 20):
             "models": [],
             "total": 0
         }
+
 @app.get("/models/status")
 async def get_model_status():
     """Get current loaded model status"""
