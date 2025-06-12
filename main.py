@@ -24,6 +24,9 @@ from model_manager import model_manager
 # Import the evaluation service
 from evaluation_service import evaluation_service, validate_test_data, load_test_data_from_file
 
+# Import the file manager
+from file_manager import file_manager
+
 app = FastAPI(
     title="Model Finetuning API",
     description="API for finetuning language models with real-time logging",
@@ -285,6 +288,7 @@ class ConfigListResponse(BaseModel):
     total: int
 
 class FinetuneRequest(BaseModel):
+    file_id: Optional[str] = None  # Use uploaded file by ID
     dataset_name: Optional[str] = "alpaca"  # Made optional with default
     model_name: Optional[str] = "unsloth/llama-3-8b-bnb-4bit"
     max_seq_length: Optional[int] = 2048
@@ -492,15 +496,75 @@ def run_training_job_with_data_file(job_id: str, data_file_path: str, config: Di
         if os.path.exists(data_file_path):
             os.remove(data_file_path)
 
+def run_training_job_with_file_id(job_id: str, file_id: str, config: Dict[str, Any]):
+    """Run training with file_id from file manager"""
+    try:
+        training_jobs[job_id]["status"] = "running"
+        training_jobs[job_id]["started_at"] = datetime.now().isoformat()
+        
+        # Save updated session to persistent storage
+        save_training_session(job_id, training_jobs[job_id])
+        
+        # Get file path from file manager
+        file_path = file_manager.get_file_path(file_id)
+        if not file_path:
+            raise ValueError(f"File with ID {file_id} not found")
+        
+        # Update file usage statistics
+        file_manager.update_file_usage(file_id, job_id)
+        
+        # Call training function with file path and config
+        train_with_config(file_path, config, job_id)
+        
+        training_jobs[job_id]["status"] = "completed"
+        training_jobs[job_id]["completed_at"] = datetime.now().isoformat()
+        training_jobs[job_id]["message"] = "Training completed successfully"
+        
+        # Save logs to session directory
+        if os.path.exists('training_logs.jsonl'):
+            try:
+                with open('training_logs.jsonl', 'r') as f:
+                    logs = [json.loads(line) for line in f.readlines()]
+                save_session_logs(job_id, logs)
+            except Exception as log_error:
+                print(f"Warning: Could not save session logs: {log_error}")
+        
+        # Save final session state to persistent storage
+        save_training_session(job_id, training_jobs[job_id])
+        
+    except Exception as e:
+        training_jobs[job_id]["status"] = "failed"
+        training_jobs[job_id]["error"] = str(e)
+        training_jobs[job_id]["failed_at"] = datetime.now().isoformat()
+        
+        # Save failed session state to persistent storage
+        save_training_session(job_id, training_jobs[job_id])
+
 def run_training_job(job_id: str, config: FinetuneRequest):
     """Run training in a separate thread (legacy method)"""
     try:
         training_jobs[job_id]["status"] = "running"
         training_jobs[job_id]["started_at"] = datetime.now().isoformat()
         
-        # Convert to dict and call new training function
-        config_dict = config.dict()
-        train_with_config(None, config_dict)
+        # Check if file_id is provided
+        if config.file_id:
+            # Use file from file manager
+            file_path = file_manager.get_file_path(config.file_id)
+            if not file_path:
+                raise ValueError(f"File with ID {config.file_id} not found")
+            
+            # Update file usage statistics
+            file_manager.update_file_usage(config.file_id, job_id)
+            
+            # Convert to dict and call training function with file
+            config_dict = config.dict()
+            config_dict.pop('file_id', None)  # Remove file_id from config
+            train_with_config(file_path, config_dict, job_id)
+        else:
+            # Convert to dict and call new training function
+            config_dict = config.dict()
+            config_dict.pop('file_id', None)  # Remove file_id from config
+            train_with_config(None, config_dict, job_id)
         
         training_jobs[job_id]["status"] = "completed"
         training_jobs[job_id]["completed_at"] = datetime.now().isoformat()
@@ -815,6 +879,62 @@ async def handle_base64_request(request: Request, background_tasks: BackgroundTa
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error processing base64 request: {str(e)}")
+
+@app.post("/finetune-with-file", response_model=FinetuneResponse)
+async def start_finetuning_with_file_id(
+    file_id: str,
+    config: Dict[str, Any],
+    background_tasks: BackgroundTasks
+):
+    """Start finetuning with a file_id from the file manager"""
+    try:
+        # Validate file_id
+        file_info = file_manager.get_file_info(file_id)
+        if not file_info:
+            raise HTTPException(status_code=404, detail=f"File with ID {file_id} not found")
+        
+        # Validate file status
+        if file_info.get('validation_status') != 'valid':
+            raise HTTPException(
+                status_code=400, 
+                detail=f"File validation failed: {file_info.get('validation_details', {}).get('issues', ['Unknown validation error'])}"
+            )
+        
+        # Generate unique job ID
+        job_id = str(uuid.uuid4())
+        
+        # Initialize job tracking with file information
+        session_data = {
+            "id": job_id,
+            "status": "queued",
+            "config": config,
+            "file_id": file_id,
+            "file_info": file_info,
+            "dataset_info": file_info.get('validation_details', {}),
+            "created_at": datetime.now().isoformat(),
+            "logs": [],
+            "upload_method": "file_manager"
+        }
+        
+        training_jobs[job_id] = session_data
+        
+        # Save session to persistent storage
+        save_training_session(job_id, session_data)
+        
+        # Start training in background with file_id
+        background_tasks.add_task(run_training_job_with_file_id, job_id, file_id, config)
+        
+        return FinetuneResponse(
+            job_id=job_id,
+            status="queued",
+            message=f"Finetuning job queued with file '{file_info['display_name']}' ({file_info['validation_details']['total_rows']} samples)",
+            dashboard_url=f"https://finetune_engine.deepcite.in/training/{job_id}"
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error starting training with file: {str(e)}")
 
 @app.post("/finetune-legacy", response_model=FinetuneResponse)
 async def start_finetuning_legacy(request: FinetuneRequest, background_tasks: BackgroundTasks):
@@ -2708,6 +2828,339 @@ async def delete_evaluation_job(job_id: str):
         "status": "deleted",
         "message": "Evaluation job deleted successfully"
     }
+
+# ============================================================================
+# FILE MANAGEMENT ENDPOINTS
+# ============================================================================
+
+class FileUploadRequest(BaseModel):
+    file_content: str  # base64 encoded file content
+    original_filename: str
+    display_name: Optional[str] = None
+
+class FileUploadResponse(BaseModel):
+    success: bool
+    file_id: Optional[str] = None
+    message: str
+    metadata: Optional[Dict[str, Any]] = None
+
+class FileListResponse(BaseModel):
+    files: List[Dict[str, Any]]
+    total: int
+    storage_stats: Dict[str, Any]
+
+class FileUpdateRequest(BaseModel):
+    display_name: Optional[str] = None
+    tags: Optional[List[str]] = None
+
+@app.post("/api/files/upload", response_model=FileUploadResponse)
+async def upload_training_file(
+    request: Request
+):
+    """Upload a training data file (multipart or base64)"""
+    
+    content_type = request.headers.get("content-type", "")
+    
+    if content_type.startswith("multipart/form-data"):
+        return await handle_file_upload_multipart(request)
+    elif content_type.startswith("application/json"):
+        return await handle_file_upload_base64(request)
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="Content-Type must be either 'multipart/form-data' or 'application/json'"
+        )
+
+async def handle_file_upload_multipart(request: Request):
+    """Handle multipart file upload"""
+    try:
+        form = await request.form()
+        
+        # Extract file and metadata
+        data_file = form.get("file")
+        display_name = form.get("display_name")
+        
+        if not data_file:
+            raise HTTPException(status_code=400, detail="file is required")
+        
+        if not hasattr(data_file, 'filename') or not hasattr(data_file, 'file'):
+            raise HTTPException(status_code=400, detail="file must be a valid file upload")
+        
+        if not data_file.filename:
+            raise HTTPException(status_code=400, detail="File must have a filename")
+        
+        # Validate file type
+        allowed_extensions = ['.csv', '.json', '.jsonl']
+        file_extension = os.path.splitext(data_file.filename)[1].lower()
+        
+        if file_extension not in allowed_extensions:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"File must be one of: {', '.join(allowed_extensions)}. Got: {file_extension}"
+            )
+        
+        # Read file content
+        file_content = await data_file.read()
+        
+        # Upload file using file manager
+        result = file_manager.upload_file(
+            file_content=file_content,
+            original_filename=data_file.filename,
+            display_name=display_name
+        )
+        
+        if result['success']:
+            return FileUploadResponse(
+                success=True,
+                file_id=result['file_id'],
+                message=f"File '{data_file.filename}' uploaded successfully",
+                metadata=result['metadata']
+            )
+        else:
+            raise HTTPException(status_code=400, detail=result['error'])
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error uploading file: {str(e)}")
+
+async def handle_file_upload_base64(request: Request):
+    """Handle base64 file upload"""
+    try:
+        body = await request.json()
+        upload_request = FileUploadRequest(**body)
+        
+        # Decode base64 content
+        try:
+            file_content = base64.b64decode(upload_request.file_content)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid base64 encoding: {str(e)}")
+        
+        # Validate file type
+        allowed_extensions = ['.csv', '.json', '.jsonl']
+        file_extension = os.path.splitext(upload_request.original_filename)[1].lower()
+        
+        if file_extension not in allowed_extensions:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"File must be one of: {', '.join(allowed_extensions)}. Got: {file_extension}"
+            )
+        
+        # Upload file using file manager
+        result = file_manager.upload_file(
+            file_content=file_content,
+            original_filename=upload_request.original_filename,
+            display_name=upload_request.display_name
+        )
+        
+        if result['success']:
+            return FileUploadResponse(
+                success=True,
+                file_id=result['file_id'],
+                message=f"File '{upload_request.original_filename}' uploaded successfully",
+                metadata=result['metadata']
+            )
+        else:
+            raise HTTPException(status_code=400, detail=result['error'])
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error uploading file: {str(e)}")
+
+@app.get("/api/files", response_model=FileListResponse)
+async def list_training_files(
+    filter_by: Optional[str] = None,
+    sort_by: Optional[str] = "upload_date",
+    sort_desc: Optional[bool] = True
+):
+    """List all uploaded training files"""
+    try:
+        files = file_manager.list_files(
+            filter_by=filter_by,
+            sort_by=sort_by,
+            sort_desc=sort_desc
+        )
+        
+        storage_stats = file_manager.get_storage_stats()
+        
+        return FileListResponse(
+            files=files,
+            total=len(files),
+            storage_stats=storage_stats
+        )
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error listing files: {str(e)}")
+
+@app.get("/api/files/{file_id}")
+async def get_file_info(file_id: str):
+    """Get detailed information about a specific file"""
+    try:
+        file_info = file_manager.get_file_info(file_id)
+        if not file_info:
+            raise HTTPException(status_code=404, detail="File not found")
+        
+        return {
+            "success": True,
+            "file_info": file_info
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error getting file info: {str(e)}")
+
+@app.get("/api/files/{file_id}/preview")
+async def get_file_preview(file_id: str, limit: int = 10):
+    """Get preview data for a file"""
+    try:
+        file_info = file_manager.get_file_info(file_id)
+        if not file_info:
+            raise HTTPException(status_code=404, detail="File not found")
+        
+        preview_data = file_manager.get_file_preview(file_id, limit)
+        if preview_data is None:
+            raise HTTPException(status_code=404, detail="Preview data not available")
+        
+        return {
+            "success": True,
+            "file_id": file_id,
+            "preview_data": preview_data,
+            "total_rows": file_info.get('validation_details', {}).get('total_rows', 0),
+            "showing_rows": len(preview_data)
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error getting file preview: {str(e)}")
+
+@app.get("/api/files/{file_id}/download")
+async def download_file(file_id: str):
+    """Download a training file"""
+    try:
+        file_info = file_manager.get_file_info(file_id)
+        if not file_info:
+            raise HTTPException(status_code=404, detail="File not found")
+        
+        file_path = file_manager.get_file_path(file_id)
+        if not file_path or not os.path.exists(file_path):
+            raise HTTPException(status_code=404, detail="File not found on disk")
+        
+        def file_generator():
+            with open(file_path, 'rb') as f:
+                while True:
+                    chunk = f.read(8192)
+                    if not chunk:
+                        break
+                    yield chunk
+        
+        return StreamingResponse(
+            file_generator(),
+            media_type='application/octet-stream',
+            headers={
+                'Content-Disposition': f'attachment; filename="{file_info["original_filename"]}"'
+            }
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error downloading file: {str(e)}")
+
+@app.put("/api/files/{file_id}")
+async def update_file_metadata(file_id: str, request: FileUpdateRequest):
+    """Update file metadata (display name, tags, etc.)"""
+    try:
+        file_info = file_manager.get_file_info(file_id)
+        if not file_info:
+            raise HTTPException(status_code=404, detail="File not found")
+        
+        updates = {}
+        if request.display_name is not None:
+            updates['display_name'] = request.display_name
+        if request.tags is not None:
+            updates['tags'] = request.tags
+        
+        success = file_manager.update_file_metadata(file_id, updates)
+        if not success:
+            raise HTTPException(status_code=400, detail="Failed to update file metadata")
+        
+        return {
+            "success": True,
+            "message": "File metadata updated successfully",
+            "file_id": file_id
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error updating file metadata: {str(e)}")
+
+@app.post("/api/files/{file_id}/revalidate")
+async def revalidate_file(file_id: str):
+    """Re-validate a file and update its validation status"""
+    try:
+        file_info = file_manager.get_file_info(file_id)
+        if not file_info:
+            raise HTTPException(status_code=404, detail="File not found")
+        
+        success = file_manager.revalidate_file(file_id)
+        if not success:
+            raise HTTPException(status_code=400, detail="Failed to revalidate file")
+        
+        # Get updated file info
+        updated_file_info = file_manager.get_file_info(file_id)
+        
+        return {
+            "success": True,
+            "message": "File revalidated successfully",
+            "file_id": file_id,
+            "validation_status": updated_file_info['validation_status'],
+            "validation_details": updated_file_info['validation_details']
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error revalidating file: {str(e)}")
+
+@app.delete("/api/files/{file_id}")
+async def delete_file(file_id: str):
+    """Delete a training file"""
+    try:
+        file_info = file_manager.get_file_info(file_id)
+        if not file_info:
+            raise HTTPException(status_code=404, detail="File not found")
+        
+        success = file_manager.delete_file(file_id)
+        if not success:
+            raise HTTPException(status_code=400, detail="Failed to delete file")
+        
+        return {
+            "success": True,
+            "message": f"File '{file_info['display_name']}' deleted successfully",
+            "file_id": file_id
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error deleting file: {str(e)}")
+
+@app.get("/api/files/stats")
+async def get_storage_stats():
+    """Get file storage statistics"""
+    try:
+        stats = file_manager.get_storage_stats()
+        return {
+            "success": True,
+            "stats": stats
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error getting storage stats: {str(e)}")
 
 # ============================================================================
 # CONFIGURATION MANAGEMENT ENDPOINTS
