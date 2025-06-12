@@ -356,8 +356,8 @@ def train_with_config(csv_path: str = None, config: dict = None, session_id: str
     trainer_stats = trainer.train()
     
     # Save model
-    # model_output_dir = config.get("output_dir", "./results")
-    model_output_dir = "./results"
+    model_output_dir = config.get("output_dir", "./results")
+    # model_output_dir = "./results"
     model.save_pretrained(model_output_dir)
     tokenizer.save_pretrained(model_output_dir)
     
