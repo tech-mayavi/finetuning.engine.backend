@@ -2078,7 +2078,7 @@ async def get_training_session_page(session_id: str):
 # CHAT API ENDPOINTS
 # ============================================================================
 
-@app.get("/models/available")
+@app.get("/api/models/available")
 async def get_available_models():
     """Get list of available trained models"""
     try:
@@ -2091,7 +2091,7 @@ async def get_available_models():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error getting available models: {str(e)}")
 
-@app.get("/models/huggingface")
+@app.get("/api/models/huggingface")
 async def get_huggingface_models():
     """Get curated list of popular verified Hugging Face models"""
     try:
@@ -2177,7 +2177,7 @@ async def get_huggingface_models():
             "note": "Using fallback models"
         }
 
-@app.get("/models/huggingface/search")
+@app.get("/api/models/huggingface/search")
 async def search_huggingface_models(query: str, limit: int = 20):
     """Search Hugging Face models with verification filters"""
     try:
