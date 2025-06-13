@@ -13,6 +13,9 @@ import pandas as pd
 # Import our custom logging callback
 from log_monitor import DetailedLoggingCallback
 
+# Import IST timezone utilities
+from timezone_utils import get_ist_timestamp, get_ist_datetime, convert_to_ist_timestamp
+
 def setup_model_and_tokenizer():
     """Setup Unsloth model and tokenizer"""
     model, tokenizer = FastLanguageModel.from_pretrained(
@@ -201,7 +204,7 @@ def train_with_config(csv_path: str = None, config: dict = None, session_id: str
     
     # Log configuration
     log_entry = {
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": get_ist_timestamp(),
         "type": "config_loaded",
         "level": "INFO",
         "message": "🔧 Training configuration loaded",
@@ -214,7 +217,7 @@ def train_with_config(csv_path: str = None, config: dict = None, session_id: str
     
     # Log initialization steps
     log_entry = {
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": get_ist_timestamp(),
         "type": "setup_start",
         "level": "INFO",
         "message": "🚀 Setting up model and tokenizer...",
@@ -263,7 +266,7 @@ def train_with_config(csv_path: str = None, config: dict = None, session_id: str
     
     # Log model setup completion
     log_entry = {
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": get_ist_timestamp(),
         "type": "model_loaded",
         "level": "INFO",
         "message": "✅ Model and tokenizer loaded successfully",
@@ -275,7 +278,7 @@ def train_with_config(csv_path: str = None, config: dict = None, session_id: str
     
     # Log dataset preparation
     log_entry = {
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": get_ist_timestamp(),
         "type": "dataset_prep",
         "level": "INFO",
         "message": "📊 Preparing dataset...",
@@ -297,7 +300,7 @@ def train_with_config(csv_path: str = None, config: dict = None, session_id: str
     
     # Log dataset preparation completion
     log_entry = {
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": get_ist_timestamp(),
         "type": "dataset_ready",
         "level": "INFO",
         "message": f"✅ Dataset prepared and ready for training from {dataset_source}",
@@ -330,7 +333,7 @@ def train_with_config(csv_path: str = None, config: dict = None, session_id: str
     
     # Log training arguments
     log_entry = {
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": get_ist_timestamp(),
         "type": "training_args",
         "level": "INFO",
         "message": "⚙️ Training arguments configured",
@@ -375,7 +378,7 @@ def train_with_config(csv_path: str = None, config: dict = None, session_id: str
     
     # Log completion
     completion_log = {
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": get_ist_timestamp(),
         "type": "training_complete",
         "level": "INFO",
         "message": f"🎉 Training completed successfully! Model saved to {model_output_dir}",

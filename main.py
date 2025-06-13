@@ -15,6 +15,9 @@ import tempfile
 import shutil
 import base64
 
+# Import IST timezone utilities
+from timezone_utils import get_ist_timestamp, get_ist_datetime, convert_to_ist_timestamp
+
 # Import the training functionality
 from train_with_logging import train_with_config
 
@@ -453,7 +456,7 @@ def run_training_job_with_data_file(job_id: str, data_file_path: str, config: Di
     """Run training with data file (CSV/JSON) in a separate thread"""
     try:
         training_jobs[job_id]["status"] = "running"
-        training_jobs[job_id]["started_at"] = datetime.now().isoformat()
+        training_jobs[job_id]["started_at"] = get_ist_timestamp()
         
         # Save updated session to persistent storage
         save_training_session(job_id, training_jobs[job_id])
@@ -470,7 +473,7 @@ def run_training_job_with_data_file(job_id: str, data_file_path: str, config: Di
         train_with_config(data_file_path, config, job_id)
         
         training_jobs[job_id]["status"] = "completed"
-        training_jobs[job_id]["completed_at"] = datetime.now().isoformat()
+        training_jobs[job_id]["completed_at"] = get_ist_timestamp()
         training_jobs[job_id]["message"] = "Training completed successfully"
         
         # Save logs to session directory
@@ -488,7 +491,7 @@ def run_training_job_with_data_file(job_id: str, data_file_path: str, config: Di
     except Exception as e:
         training_jobs[job_id]["status"] = "failed"
         training_jobs[job_id]["error"] = str(e)
-        training_jobs[job_id]["failed_at"] = datetime.now().isoformat()
+        training_jobs[job_id]["failed_at"] = get_ist_timestamp()
         
         # Save failed session state to persistent storage
         save_training_session(job_id, training_jobs[job_id])
@@ -501,7 +504,7 @@ def run_training_job_with_file_id(job_id: str, file_id: str, config: Dict[str, A
     """Run training with file_id from file manager"""
     try:
         training_jobs[job_id]["status"] = "running"
-        training_jobs[job_id]["started_at"] = datetime.now().isoformat()
+        training_jobs[job_id]["started_at"] = get_ist_timestamp()
         
         # Save updated session to persistent storage
         save_training_session(job_id, training_jobs[job_id])
@@ -518,7 +521,7 @@ def run_training_job_with_file_id(job_id: str, file_id: str, config: Dict[str, A
         train_with_config(file_path, config, job_id)
         
         training_jobs[job_id]["status"] = "completed"
-        training_jobs[job_id]["completed_at"] = datetime.now().isoformat()
+        training_jobs[job_id]["completed_at"] = get_ist_timestamp()
         training_jobs[job_id]["message"] = "Training completed successfully"
         
         # Save logs to session directory
@@ -623,7 +626,7 @@ async def start_simple_finetuning(background_tasks: BackgroundTasks):
         "id": job_id,
         "status": "queued",
         "config": request.dict(),
-        "created_at": datetime.now().isoformat(),
+        "created_at": get_ist_timestamp(),
         "logs": []
     }
     
@@ -756,7 +759,7 @@ async def handle_multipart_request(request: Request, background_tasks: Backgroun
             "status": "queued",
             "config": config,
             "dataset_info": validation_result,
-            "created_at": datetime.now().isoformat(),
+            "created_at": get_ist_timestamp(),
             "logs": [],
             "upload_method": "multipart"
         }
@@ -859,7 +862,7 @@ async def handle_base64_request(request: Request, background_tasks: BackgroundTa
             "status": "queued",
             "config": config,
             "dataset_info": validation_result,
-            "created_at": datetime.now().isoformat(),
+            "created_at": get_ist_timestamp(),
             "logs": [],
             "upload_method": "base64"
         }
@@ -912,7 +915,7 @@ async def start_finetuning_with_file_id(
             "file_id": file_id,
             "file_info": file_info,
             "dataset_info": file_info.get('validation_details', {}),
-            "created_at": datetime.now().isoformat(),
+            "created_at": get_ist_timestamp(),
             "logs": [],
             "upload_method": "file_manager"
         }
@@ -960,7 +963,7 @@ async def start_finetuning_legacy(request: FinetuneRequest, background_tasks: Ba
             "id": job_id,
             "status": "queued",
             "config": request.dict(),
-            "created_at": datetime.now().isoformat(),
+            "created_at": get_ist_timestamp(),
             "logs": []
         }
         
@@ -3212,7 +3215,7 @@ async def save_configuration(request: ConfigSaveRequest):
             "metadata": {
                 "name": request.name,
                 "description": request.description,
-                "created_at": datetime.now().isoformat(),
+                "created_at": get_ist_timestamp(),
                 "version": "1.0"
             },
             "basic_parameters": request.basic_parameters,

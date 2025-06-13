@@ -6,6 +6,9 @@ from flask import Flask, render_template, jsonify
 from transformers import TrainerCallback
 import os
 
+# Import IST timezone utilities
+from timezone_utils import get_ist_timestamp, get_ist_datetime, convert_to_ist_timestamp
+
 class DetailedLoggingCallback(TrainerCallback):
     """Custom callback for detailed training logging"""
     
@@ -23,7 +26,7 @@ class DetailedLoggingCallback(TrainerCallback):
         
         # Log training initialization
         self._write_log({
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": get_ist_timestamp(),
             "type": "initialization",
             "level": "INFO",
             "message": "🚀 Initializing training process",
@@ -34,7 +37,7 @@ class DetailedLoggingCallback(TrainerCallback):
         
         # Log training start
         self._write_log({
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": get_ist_timestamp(),
             "type": "training_start",
             "level": "INFO",
             "message": "🎯 Training started",
@@ -47,7 +50,7 @@ class DetailedLoggingCallback(TrainerCallback):
     def on_step_begin(self, args, state, control, **kwargs):
         """Called at the beginning of each training step"""
         self._write_log({
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": get_ist_timestamp(),
             "type": "step_begin",
             "level": "DEBUG",
             "message": f"📝 Starting step {state.global_step + 1}",
@@ -73,7 +76,7 @@ class DetailedLoggingCallback(TrainerCallback):
         eta_minutes = eta_seconds / 60
         
         log_entry = {
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": get_ist_timestamp(),
             "type": "training_step",
             "level": "INFO",
             "message": f"✅ Step {state.global_step} completed - Loss: {logs.get('loss', 0):.4f}",
@@ -93,7 +96,7 @@ class DetailedLoggingCallback(TrainerCallback):
     def on_epoch_begin(self, args, state, control, **kwargs):
         """Called at the beginning of each epoch"""
         self._write_log({
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": get_ist_timestamp(),
             "type": "epoch_begin",
             "level": "INFO",
             "message": f"🔄 Starting epoch {state.epoch + 1}/{args.num_train_epochs}",
@@ -107,7 +110,7 @@ class DetailedLoggingCallback(TrainerCallback):
         logs = kwargs.get('logs', {})
         
         log_entry = {
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": get_ist_timestamp(),
             "type": "epoch_end",
             "level": "INFO",
             "message": f"🏁 Epoch {state.epoch} completed",
@@ -122,7 +125,7 @@ class DetailedLoggingCallback(TrainerCallback):
     def on_save(self, args, state, control, **kwargs):
         """Called when model is saved"""
         self._write_log({
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": get_ist_timestamp(),
             "type": "model_save",
             "level": "INFO",
             "message": f"💾 Model checkpoint saved at step {state.global_step}",
@@ -134,7 +137,7 @@ class DetailedLoggingCallback(TrainerCallback):
     def on_evaluate(self, args, state, control, **kwargs):
         """Called during evaluation"""
         self._write_log({
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": get_ist_timestamp(),
             "type": "evaluation",
             "level": "INFO",
             "message": f"📊 Running evaluation at step {state.global_step}",
@@ -146,7 +149,7 @@ class DetailedLoggingCallback(TrainerCallback):
         """Called during prediction steps"""
         if state.global_step % 10 == 0:  # Log every 10 prediction steps to avoid spam
             self._write_log({
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": get_ist_timestamp(),
                 "type": "prediction",
                 "level": "DEBUG",
                 "message": f"🔮 Prediction step at {state.global_step}",
@@ -158,7 +161,7 @@ class DetailedLoggingCallback(TrainerCallback):
         """Called when logging occurs"""
         if logs and state.global_step % self.logging_steps == 0:  # Log detailed metrics based on logging_steps
             self._write_log({
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": get_ist_timestamp(),
                 "type": "metrics",
                 "level": "DEBUG",
                 "message": f"📈 Training metrics update - Step {state.global_step}",
@@ -171,7 +174,7 @@ class DetailedLoggingCallback(TrainerCallback):
         """Called at the end of training"""
         total_time = time.time() - self.start_time
         self._write_log({
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": get_ist_timestamp(),
             "type": "training_complete",
             "level": "INFO",
             "message": f"🎉 Training completed successfully in {total_time/60:.2f} minutes",
@@ -230,7 +233,7 @@ def create_dashboard_app():
         """API endpoint to get training status"""
         status = {
             "status": "running",
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": get_ist_timestamp(),
             "log_count": 0
         }
         
