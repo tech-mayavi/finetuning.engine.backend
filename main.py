@@ -2183,17 +2183,10 @@ async def get_huggingface_models():
 
 @app.get("/api/models/huggingface/search")
 async def search_huggingface_models(query: str, limit: int = 20):
-    """Search Hugging Face models with verification filters"""
+    """Search Hugging Face models without restrictions"""
     try:
         import requests
         import re
-        
-        # Verified organizations whitelist
-        VERIFIED_ORGS = {
-            'microsoft', 'meta-llama', 'mistralai', 'google', 'Qwen', 
-            'stabilityai', 'EleutherAI', 'huggingface', 'codellama',
-            'bigscience', 'facebook', 'openai-community'
-        }
         
         def extract_model_size(model_name, tags=None):
             """Extract model size from name or tags"""
@@ -2209,7 +2202,7 @@ async def search_huggingface_models(query: str, limit: int = 20):
                 match = re.search(pattern, name_lower)
                 if match:
                     size = float(match.group(1))
-                    return size
+                    return f"{size}B"
             
             # Check tags if available
             if tags:
@@ -2220,71 +2213,15 @@ async def search_huggingface_models(query: str, limit: int = 20):
                             match = re.search(pattern, tag_lower)
                             if match:
                                 size = float(match.group(1))
-                                return size
+                                return f"{size}B"
             
-            return None
+            return "Unknown"
         
         def get_organization(model_id):
             """Extract organization from model ID"""
             if '/' in model_id:
                 return model_id.split('/')[0]
-            return 'unknown'
-        
-        def is_instruction_model(model_id, tags=None):
-            """Check if model is instruction-tuned or chat model"""
-            name_lower = model_id.lower()
-            instruction_keywords = ['instruct', 'chat', 'it', 'sft', 'dpo']
-            
-            # Check model name
-            for keyword in instruction_keywords:
-                if keyword in name_lower:
-                    return True
-            
-            # Check tags
-            if tags:
-                for tag in tags:
-                    if isinstance(tag, str) and any(keyword in tag.lower() for keyword in instruction_keywords):
-                        return True
-            
-            return False
-        
-        def is_verified_genuine_model(model_data):
-            """Check if model is verified and genuine"""
-            model_id = model_data.get('id', '')
-            downloads = model_data.get('downloads', 0)
-            tags = model_data.get('tags', [])
-            
-            # Get organization
-            org = get_organization(model_id)
-            
-            # Must be from verified organization
-            if org not in VERIFIED_ORGS:
-                return False
-            
-            # Must have reasonable download count (indicates legitimacy)
-            if downloads < 1000:
-                return False
-            
-            # Must be instruction/chat model
-            if not is_instruction_model(model_id, tags):
-                return False
-            
-            # Extract and check model size
-            model_size = extract_model_size(model_id, tags)
-            if model_size is None or model_size > 7.0:
-                return False
-            
-            # Exclude derivative/fine-tuned models
-            exclude_patterns = [
-                'uncensored', 'roleplay', 'merged', 'gguf', 'quantized',
-                'finetune', 'custom', 'experimental', 'alpha', 'beta'
-            ]
-            
-            model_name_lower = model_id.lower()
-            if any(pattern in model_name_lower for pattern in exclude_patterns):
-                return False
-            
-            return True
+            return 'Unknown'
         
         # Search Hugging Face API
         response = requests.get(
@@ -2294,43 +2231,39 @@ async def search_huggingface_models(query: str, limit: int = 20):
                 "filter": "text-generation",
                 "sort": "downloads",
                 "direction": -1,
-                "limit": limit * 5  # Get more to filter from
+                "limit": limit
             },
             timeout=30.0
         )
         response.raise_for_status()
         search_results = response.json()
         
-        # Filter and process results
-        verified_models = []
+        # Process all results without filtering
+        models = []
         for model in search_results:
-            if is_verified_genuine_model(model):
-                model_id = model.get('id', '')
-                org = get_organization(model_id)
-                size = extract_model_size(model_id, model.get('tags', []))
-                
-                model_entry = {
-                    "id": model_id.replace('/', '-').lower(),
-                    "name": model_id,
-                    "description": f"{org.title()} {size}B parameter verified instruction model",
-                    "size": f"{size}B",
-                    "architecture": org.title(),
-                    "family": org.title(),
-                    "isBase": True,
-                    "hf_model_id": model_id,
-                    "downloads": model.get('downloads', 0)
-                }
-                verified_models.append(model_entry)
-        
-        # Sort by downloads and limit results
-        verified_models.sort(key=lambda x: x['downloads'], reverse=True)
-        verified_models = verified_models[:limit]
+            model_id = model.get('id', '')
+            org = get_organization(model_id)
+            size = extract_model_size(model_id, model.get('tags', []))
+            downloads = model.get('downloads', 0)
+            
+            model_entry = {
+                "id": model_id.replace('/', '-').lower(),
+                "name": model_id,
+                "description": f"{org} model with {downloads:,} downloads",
+                "size": size,
+                "architecture": org,
+                "family": org,
+                "isBase": True,
+                "hf_model_id": model_id,
+                "downloads": downloads
+            }
+            models.append(model_entry)
         
         return {
             "status": "success",
             "query": query,
-            "models": verified_models,
-            "total": len(verified_models)
+            "models": models,
+            "total": len(models)
         }
         
     except Exception as e:
